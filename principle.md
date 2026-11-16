@@ -1,0 +1,1 @@
+ultra-lightweight terminal, highly customisable, single executable, no dependencies, focus on speed, minimalism, animation

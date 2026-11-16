@@ -1,0 +1,24 @@
+[package]
+name = "lunula_terminal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+env_logger = "0.11.11"
+glyphon = "0.12.0"
+log = "0.4.35"
+mlua = { version = "0.12.2", features = ["lua54", "vendored"] }
+pollster = "1.0.1"
+portable-pty = "0.9.0"
+vte = "0.15.0"
+wgpu = "30.0.2"
+winit = "0.30.13"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
