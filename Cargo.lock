@@ -1074,6 +1074,7 @@ dependencies = [
  "mlua",
  "pollster",
  "portable-pty",
+ "unicode-width",
  "vte",
  "wgpu",
  "winit",
