@@ -44,7 +44,7 @@ return {
         -- Kitty-style elastic cursor trail (ekor smear elastis saat kursor melompat)
         trail = true,
         trail_stiffness = 550.0,
-        trail_damping = 28.0,
+        trail_damping = 48.0,
     },
     scroll = {
         -- Smooth sub-pixel scrolling (interpolasi pixel Y-offset 60-120 FPS)

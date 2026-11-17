@@ -81,6 +81,7 @@ pub fn set_text(text: &str) -> bool {
 }
 
 #[inline]
+#[allow(non_snake_case)]
 const fn hMem_from(ptr: *mut c_void) -> *mut c_void {
     ptr
 }

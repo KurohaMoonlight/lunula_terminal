@@ -217,16 +217,7 @@ impl GpuState {
                         return;
                     }
                     WindowControlAction::Settings => {
-                        let config_file = if self.config_path.exists() {
-                            self.config_path.to_string_lossy().to_string()
-                        } else {
-                            "lunula.lua".to_string()
-                        };
-                        if let Some(pane) = self.tab_manager.active_pane_mut() {
-                            let cmd_str = format!("luna \"{}\"\r", config_file);
-                            pane.pty.write_bytes(cmd_str.as_bytes());
-                            pane.terminal.scroll_to_bottom();
-                        }
+                        // Gear is currently purely decorative
                         return;
                     }
                     WindowControlAction::Drag => {

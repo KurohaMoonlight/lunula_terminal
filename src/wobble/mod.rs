@@ -36,6 +36,7 @@ pub enum WindowControlAction {
     Close,
     Minimize,
     Maximize,
+    #[allow(dead_code)]
     Settings,
     Help,
     Drag,
@@ -513,9 +514,7 @@ impl WobbleWindow {
                 if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
                     return WindowControlAction::Help;
                 }
-                if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 6.0 && ry <= 36.0 {
-                    return WindowControlAction::Settings;
-                }
+                // Gear icon is purely decorative ornament for now (no Settings action)
 
                 if !self.is_maximized {
                     self.is_dragging = true;
@@ -543,9 +542,7 @@ impl WobbleWindow {
                 return 3.0;
             }
             let total_w = self.size[0];
-            if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 6.0 && ry <= 36.0 {
-                return 4.0;
-            }
+            // Gear icon is purely decorative; only Help '?' is an active interactive button
             if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
                 return 5.0;
             }

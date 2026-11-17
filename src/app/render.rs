@@ -40,10 +40,11 @@ impl GpuState {
                     }
                 }
                 pane.update_physics(dt, &self.config, cell_w, cell_h);
-                if (pane.cursor_head[0] - pane.cursor_tail[0])
-                    .hypot(pane.cursor_head[1] - pane.cursor_tail[1])
-                    > 0.5
-                {
+                let target_x = pane.rect[0] + pane::PANE_PAD + pane.terminal.cursor_x as f32 * cell_w;
+                let target_y = pane.rect[1] + pane::PANE_PAD + pane.terminal.cursor_y as f32 * cell_h;
+                let head_dist = (pane.cursor_head[0] - target_x).hypot(pane.cursor_head[1] - target_y);
+                let tail_dist = (pane.cursor_head[0] - pane.cursor_tail[0]).abs();
+                if head_dist > 0.4 || tail_dist > 0.4 {
                     high_fps_animating = true;
                 }
             }
@@ -167,21 +168,14 @@ impl GpuState {
             alpha: 0.75,
         });
 
-        let is_gear_hover = self.mouse_pos[0] >= content_w - 74.0
-            && self.mouse_pos[0] <= content_w - 42.0
-            && self.mouse_pos[1] >= 6.0
-            && self.mouse_pos[1] <= 36.0;
+        // Gear Icon (purely decorative ornament for now)
         bg_rects.push(terminal::BgRect {
             x: content_w - 74.0,
             y: 7.0,
             w: 32.0,
             h: 28.0,
-            color: if is_gear_hover {
-                terminal::ColorRgb { r: 49, g: 50, b: 68 }
-            } else {
-                terminal::ColorRgb { r: 30, g: 30, b: 46 }
-            },
-            alpha: if is_gear_hover { 0.95 } else { 0.70 },
+            color: terminal::ColorRgb { r: 30, g: 30, b: 46 },
+            alpha: 0.50,
         });
 
         let is_help_hover = self.mouse_pos[0] >= content_w - 38.0
@@ -344,20 +338,18 @@ impl GpuState {
                     && pane.terminal.current_scroll_y <= 5.0
                 {
                     let cur_color = pane.terminal.cursor_config.color;
-                    let dist = (pane.cursor_head[0] - pane.cursor_tail[0])
-                        .hypot(pane.cursor_head[1] - pane.cursor_tail[1]);
+                    let dist = (pane.cursor_head[0] - pane.cursor_tail[0]).abs();
 
                     if dist > 1.5 && self.config.cursor.trail {
                         let min_x = pane.cursor_tail[0].min(pane.cursor_head[0]);
                         let max_x = pane.cursor_tail[0].max(pane.cursor_head[0]) + cell_w;
-                        let min_y = pane.cursor_tail[1].min(pane.cursor_head[1]);
-                        let max_y = pane.cursor_tail[1].max(pane.cursor_head[1]) + cell_h;
+                        let min_y = pane.cursor_head[1];
 
                         bg_rects.push(terminal::BgRect {
                             x: min_x,
                             y: min_y,
                             w: (max_x - min_x).max(cell_w),
-                            h: (max_y - min_y).max(cell_h),
+                            h: cell_h,
                             color: cur_color,
                             alpha: 0.28,
                         });
@@ -624,7 +616,7 @@ impl GpuState {
                 right: (gear_x + 32.0) as i32,
                 bottom: 35,
             },
-            default_color: glyphon::Color::rgb(205, 214, 244),
+            default_color: glyphon::Color::rgb(147, 154, 183),
             custom_glyphs: &[],
         });
 

@@ -143,6 +143,7 @@ impl CellStyle {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub const fn dim(&self) -> bool {
         (self.flags & STYLE_DIM) != 0
     }

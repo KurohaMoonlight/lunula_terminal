@@ -33,6 +33,7 @@ pub struct Pane {
     pub cursor_blink_time: f32,
     pub cursor_last_moved: Instant,
     pub prev_cursor_grid: (usize, usize),
+    pub prev_cursor_visible: bool,
     pub last_shaped_base_offset: Option<usize>,
     pub scroll_subpixel_y: f32,
 }
@@ -84,6 +85,7 @@ impl Pane {
             cursor_blink_time: 0.0,
             cursor_last_moved: Instant::now(),
             prev_cursor_grid: (0, 0),
+            prev_cursor_visible: true,
             last_shaped_base_offset: None,
             scroll_subpixel_y: 0.0,
         })
@@ -103,31 +105,67 @@ impl Pane {
     }
 
     pub fn update_physics(&mut self, dt: f32, config: &LunulaConfig, cell_w: f32, cell_h: f32) {
+        let is_visible = self.terminal.cursor_visible;
         let cur_grid = (self.terminal.cursor_x, self.terminal.cursor_y);
         let now = Instant::now();
-        if cur_grid != self.prev_cursor_grid {
-            self.cursor_last_moved = now;
-            self.cursor_blink_time = 0.0;
-            self.prev_cursor_grid = cur_grid;
-            self.terminal.dirty = true;
-        }
-        self.cursor_blink_time += dt;
 
         let target_x = self.rect[0] + PANE_PAD + self.terminal.cursor_x as f32 * cell_w;
         let target_y = self.rect[1] + PANE_PAD + self.terminal.cursor_y as f32 * cell_h;
 
+        // When terminal cursor is hidden (e.g. during TUI full-frame redraws in luna/vim/nano),
+        // snap instantly so intermediate pen coordinates never pull the physics spring.
+        if !is_visible {
+            self.cursor_head = [target_x, target_y];
+            self.cursor_tail = [target_x, target_y];
+            self.cursor_head_vel = [0.0, 0.0];
+            self.cursor_tail_vel = [0.0, 0.0];
+            self.prev_cursor_grid = cur_grid;
+            self.prev_cursor_visible = false;
+            return;
+        }
+
+        let just_became_visible = !self.prev_cursor_visible && is_visible;
+        self.prev_cursor_visible = true;
+
+        let grid_dx = (cur_grid.0 as isize - self.prev_cursor_grid.0 as isize).abs();
+        let grid_dy = (cur_grid.1 as isize - self.prev_cursor_grid.1 as isize).abs();
+
+        if cur_grid != self.prev_cursor_grid {
+            self.cursor_last_moved = now;
+            self.cursor_blink_time = 0.0;
+            self.terminal.dirty = true;
+
+            // When moving between lines, snap the horizontal tail immediately to head so
+            // no giant multi-line bounding box smear flashes across the screen.
+            if grid_dy > 0 {
+                self.cursor_tail[0] = self.cursor_head[0];
+                self.cursor_tail_vel[0] = 0.0;
+            }
+
+            // Snap immediately on large jumps (e.g. PageDown, buffer jump, or unhiding far away)
+            if grid_dy > 3 || grid_dx > 40 || (just_became_visible && (grid_dy > 1 || grid_dx > 10)) {
+                self.cursor_head = [target_x, target_y];
+                self.cursor_tail = [target_x, target_y];
+                self.cursor_head_vel = [0.0, 0.0];
+                self.cursor_tail_vel = [0.0, 0.0];
+                self.prev_cursor_grid = cur_grid;
+                return;
+            }
+
+            self.prev_cursor_grid = cur_grid;
+        }
+        self.cursor_blink_time += dt;
+
         let dx = target_x - self.cursor_head[0];
         let dy = target_y - self.cursor_head[1];
         let tdx = self.cursor_head[0] - self.cursor_tail[0];
-        let tdy = self.cursor_head[1] - self.cursor_tail[1];
 
-        // Snap directly to target when already settled to avoid micro-oscillations
-        if dx.abs() < 0.05
-            && dy.abs() < 0.05
-            && tdx.abs() < 0.05
-            && tdy.abs() < 0.05
-            && self.cursor_head_vel[0].abs() < 0.1
-            && self.cursor_head_vel[1].abs() < 0.1
+        // Settle cleanly when close to target to eliminate micro-vibrations
+        if dx.abs() < 0.2
+            && dy.abs() < 0.2
+            && tdx.abs() < 0.2
+            && self.cursor_head_vel[0].abs() < 1.0
+            && self.cursor_head_vel[1].abs() < 1.0
         {
             self.cursor_head = [target_x, target_y];
             self.cursor_tail = [target_x, target_y];
@@ -136,25 +174,47 @@ impl Pane {
             return;
         }
 
-        let k_head = config.cursor.trail_stiffness;
-        let d_head = config.cursor.trail_damping;
-        self.cursor_head_vel[0] =
-            (self.cursor_head_vel[0] + dx * k_head * dt) * (1.0 - d_head * dt).max(0.0);
-        self.cursor_head_vel[1] =
-            (self.cursor_head_vel[1] + dy * k_head * dt) * (1.0 - d_head * dt).max(0.0);
-        self.cursor_head[0] += self.cursor_head_vel[0] * dt;
-        self.cursor_head[1] += self.cursor_head_vel[1] * dt;
+        // Substepping semi-implicit Euler integration for unconditional stability and zero oscillation.
+        let k_head_x = config.cursor.trail_stiffness.clamp(100.0, 1000.0);
+        let d_head_x = config.cursor.trail_damping.max(2.0 * k_head_x.sqrt() * 0.95);
 
-        let k_tail = k_head * 0.45;
-        let d_tail = d_head * 0.70;
-        let tdx = self.cursor_head[0] - self.cursor_tail[0];
-        let tdy = self.cursor_head[1] - self.cursor_tail[1];
-        self.cursor_tail_vel[0] =
-            (self.cursor_tail_vel[0] + tdx * k_tail * dt) * (1.0 - d_tail * dt).max(0.0);
-        self.cursor_tail_vel[1] =
-            (self.cursor_tail_vel[1] + tdy * k_tail * dt) * (1.0 - d_tail * dt).max(0.0);
-        self.cursor_tail[0] += self.cursor_tail_vel[0] * dt;
-        self.cursor_tail[1] += self.cursor_tail_vel[1] * dt;
+        // Vertical movement is overdamped (d_y >= 2*sqrt(k_y)) to completely prevent row bounce/overshoot
+        let k_head_y = 650.0;
+        let d_head_y = 55.0; // 2 * sqrt(650) ~ 51.0, 55.0 is critically damped/overdamped
+
+        let k_tail_x = k_head_x * 0.45;
+        let d_tail_x = d_head_x * 0.85;
+
+        // Substep physics to ensure numerical stability at any frame rate (e.g. 30 FPS, 60 FPS, 144 FPS)
+        let mut remaining = dt.clamp(0.001, 0.05);
+        let max_substep = 0.008; // 125 Hz substeps
+
+        while remaining > 0.0 {
+            let sub_dt = remaining.min(max_substep);
+            remaining -= sub_dt;
+
+            // Head X (Semi-implicit Euler with division damping factor)
+            let damp_x = 1.0 / (1.0 + d_head_x * sub_dt);
+            let cur_dx = target_x - self.cursor_head[0];
+            self.cursor_head_vel[0] = (self.cursor_head_vel[0] + cur_dx * k_head_x * sub_dt) * damp_x;
+            self.cursor_head[0] += self.cursor_head_vel[0] * sub_dt;
+
+            // Head Y (Overdamped for smooth, non-oscillating line movement)
+            let damp_y = 1.0 / (1.0 + d_head_y * sub_dt);
+            let cur_dy = target_y - self.cursor_head[1];
+            self.cursor_head_vel[1] = (self.cursor_head_vel[1] + cur_dy * k_head_y * sub_dt) * damp_y;
+            self.cursor_head[1] += self.cursor_head_vel[1] * sub_dt;
+
+            // Tail X
+            let cur_tdx = self.cursor_head[0] - self.cursor_tail[0];
+            let damp_tail_x = 1.0 / (1.0 + d_tail_x * sub_dt);
+            self.cursor_tail_vel[0] = (self.cursor_tail_vel[0] + cur_tdx * k_tail_x * sub_dt) * damp_tail_x;
+            self.cursor_tail[0] += self.cursor_tail_vel[0] * sub_dt;
+
+            // Tail Y follows Head Y directly so the trail smear is strictly horizontal
+            self.cursor_tail[1] = self.cursor_head[1];
+            self.cursor_tail_vel[1] = self.cursor_head_vel[1];
+        }
     }
 
     /// Drains incoming PTY bytes into `TerminalGrid` without running HarfBuzz shaping.
