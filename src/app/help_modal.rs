@@ -1,0 +1,124 @@
+//! Help & Shortcuts reference overlay builder (`F1` / `Ctrl+Shift+H`).
+
+use crate::render::TextEngine;
+use crate::terminal::{CellStyle, ColorRgb};
+
+pub fn build_help_buffer(text_engine: &mut TextEngine, buffer: &mut glyphon::Buffer) -> f32 {
+    let mut spans = Vec::with_capacity(48);
+
+    let header_style = CellStyle::new()
+        .with_fg(ColorRgb { r: 180, g: 190, b: 254 })
+        .with_bold(true);
+    let section_style = CellStyle::new()
+        .with_fg(ColorRgb { r: 249, g: 226, b: 175 })
+        .with_bold(true);
+    let key_style = CellStyle::new()
+        .with_fg(ColorRgb { r: 166, g: 227, b: 161 })
+        .with_bold(true);
+    let desc_style = CellStyle::new().with_fg(ColorRgb { r: 205, g: 214, b: 244 });
+    let sub_style = CellStyle::new()
+        .with_fg(ColorRgb { r: 147, g: 153, b: 178 })
+        .with_dim(true);
+    let border_style = CellStyle::new().with_fg(ColorRgb { r: 108, g: 112, b: 134 });
+
+    spans.push((
+        "  🌙 LUNULA TERMINAL ── Shortcuts & Features Reference\n".to_string(),
+        header_style,
+    ));
+    spans.push((
+        "  Scroll with Mouse Wheel or ↑ ↓ / PgUp PgDn • Press [ESC] or [Q] to close\n\n".to_string(),
+        sub_style,
+    ));
+
+    spans.push(("  🪟 SPLIT PANES\n".to_string(), section_style));
+    spans.push(("  Ctrl + Shift + E    ".to_string(), key_style));
+    spans.push(("Split Vertically (side-by-side)\n".to_string(), desc_style));
+    spans.push(("  Ctrl + Shift + D    ".to_string(), key_style));
+    spans.push(("Split Horizontally (top / bottom)\n".to_string(), desc_style));
+    spans.push(("  Ctrl + Shift + W    ".to_string(), key_style));
+    spans.push((
+        "Close Active Pane / Split (or exit if last)\n".to_string(),
+        desc_style,
+    ));
+    spans.push(("  Ctrl + W            ".to_string(), key_style));
+    spans.push((
+        "Close Active Split Pane (when multiple panes open)\n".to_string(),
+        desc_style,
+    ));
+    spans.push(("  Alt + Arrows        ".to_string(), key_style));
+    spans.push((
+        "Navigate focus between panes (← ↑ → ↓)\n".to_string(),
+        desc_style,
+    ));
+    spans.push(("  exit                ".to_string(), key_style));
+    spans.push((
+        "Type 'exit' in shell to close split pane\n".to_string(),
+        desc_style,
+    ));
+    spans.push(("  [✕] button          ".to_string(), key_style));
+    spans.push((
+        "Click close badge in top-right of split pane\n\n".to_string(),
+        desc_style,
+    ));
+
+    spans.push(("  📑 TABS\n".to_string(), section_style));
+    spans.push(("  Ctrl + Shift + T    ".to_string(), key_style));
+    spans.push(("New Tab\n".to_string(), desc_style));
+    spans.push(("  Ctrl + Tab          ".to_string(), key_style));
+    spans.push(("Switch to Next Tab\n".to_string(), desc_style));
+    spans.push(("  Ctrl + Shift + Tab  ".to_string(), key_style));
+    spans.push(("Switch to Previous Tab\n".to_string(), desc_style));
+    spans.push(("  Ctrl + 1..9         ".to_string(), key_style));
+    spans.push(("Jump directly to Tab 1 through 9\n\n".to_string(), desc_style));
+
+    spans.push(("  ⚡ WINDOW & HOT RELOAD\n".to_string(), section_style));
+    spans.push(("  F11                 ".to_string(), key_style));
+    spans.push(("Toggle Fullscreen / Maximize\n".to_string(), desc_style));
+    spans.push(("  Ctrl + Shift + R    ".to_string(), key_style));
+    spans.push(("Hot Reload configuration (lunula.lua)\n".to_string(), desc_style));
+    spans.push(("  Ctrl + Shift + P    ".to_string(), key_style));
+    spans.push((
+        "Hot Reload PowerShell profile (. $PROFILE)\n".to_string(),
+        desc_style,
+    ));
+    spans.push(("  F1 / Ctrl+Shift+H   ".to_string(), key_style));
+    spans.push(("Toggle this Help reference menu\n".to_string(), desc_style));
+    spans.push(("  Drag Titlebar       ".to_string(), key_style));
+    spans.push((
+        "Move window with jelly wobble physics\n\n".to_string(),
+        desc_style,
+    ));
+
+    spans.push(("  📋 CLIPBOARD & SELECTION\n".to_string(), section_style));
+    spans.push(("  Left-Click + Drag   ".to_string(), key_style));
+    spans.push((
+        "Select text (auto-clamped to text content)\n".to_string(),
+        desc_style,
+    ));
+    spans.push(("  Right-Click         ".to_string(), key_style));
+    spans.push(("Copy selection / Paste from clipboard\n".to_string(), desc_style));
+    spans.push(("  Ctrl + C            ".to_string(), key_style));
+    spans.push((
+        "Copy selection (or send interrupt SIGINT)\n".to_string(),
+        desc_style,
+    ));
+    spans.push(("  Ctrl + V            ".to_string(), key_style));
+    spans.push(("Paste clipboard text\n\n".to_string(), desc_style));
+
+    spans.push((
+        "  ─────────────────────────────────────────────────────────────\n".to_string(),
+        border_style,
+    ));
+    spans.push((
+        "  💡 Tips: Scroll with Mouse Wheel, Arrows (↑ ↓), or drag scrollbar\n".to_string(),
+        key_style,
+    ));
+    spans.push((
+        "  Press [ESC], [F1], [Q], or click outside / [✕] to close this guide\n".to_string(),
+        sub_style,
+    ));
+
+    text_engine.shape_buffer(buffer, &spans);
+    let line_count = spans.iter().map(|(t, _)| t.matches('\n').count()).sum::<usize>() + 2;
+    line_count as f32 * text_engine.line_height + 40.0
+}

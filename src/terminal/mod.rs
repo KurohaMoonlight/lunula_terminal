@@ -1,0 +1,654 @@
+//! Core `TerminalGrid` state machine with `O(1)` `VecDeque` scrollback and buffer recycling.
+
+pub mod cell;
+pub mod parser;
+pub mod procedural;
+pub mod renderer;
+pub mod selection;
+
+pub use cell::{BgRect, Cell, CellStyle, ColorRgb, CursorConfig, CursorShape};
+pub use selection::{Selection, SelectionPoint};
+
+use std::collections::VecDeque;
+use vte::Parser;
+
+pub struct TerminalGrid {
+    pub cols: usize,
+    pub rows: usize,
+    pub cell_height: f32,
+    pub cursor_x: usize,
+    pub cursor_y: usize,
+    pub saved_cursor_x: usize,
+    pub saved_cursor_y: usize,
+    pub cursor_visible: bool,
+    pub cursor_config: CursorConfig,
+    pub title: String,
+    pub app_cursor_keys: bool,
+    pub cells: Vec<Vec<Cell>>,
+    pub current_style: CellStyle,
+    pub scrollback: VecDeque<Vec<Cell>>,
+    pub max_scrollback: usize,
+    pub scroll_offset: usize,
+    pub target_scroll_y: f32,
+    pub current_scroll_y: f32,
+    pub selection: Option<Selection>,
+    pub selection_color: ColorRgb,
+    pub parser: Parser,
+    pub dirty: bool,
+    pub responses: Vec<Vec<u8>>,
+    pub is_alt_screen: bool,
+    pub alt_screen: Option<Vec<Vec<Cell>>>,
+    pub scroll_region_top: usize,
+    pub scroll_region_bottom: usize,
+    pub bracketed_paste: bool,
+    pub mouse_reporting: bool,
+    pub sgr_mouse: bool,
+    pub hyperlinks: Vec<String>,
+    pub current_hyperlink_idx: u16,
+}
+
+impl TerminalGrid {
+    pub fn new(cols: usize, rows: usize) -> Self {
+        let cols = cols.max(10);
+        let rows = rows.max(5);
+        let cells = vec![vec![Cell::default(); cols]; rows];
+        let scroll_region_bottom = rows.saturating_sub(1);
+
+        Self {
+            cols,
+            rows,
+            cell_height: 20.0,
+            cursor_x: 0,
+            cursor_y: 0,
+            saved_cursor_x: 0,
+            saved_cursor_y: 0,
+            cursor_visible: true,
+            cursor_config: CursorConfig::default(),
+            title: "Lunula Terminal".to_string(),
+            app_cursor_keys: false,
+            cells,
+            current_style: CellStyle::default(),
+            scrollback: VecDeque::new(),
+            max_scrollback: 5000,
+            scroll_offset: 0,
+            target_scroll_y: 0.0,
+            current_scroll_y: 0.0,
+            selection: None,
+            selection_color: ColorRgb {
+                r: 88,
+                g: 91,
+                b: 112,
+            },
+            parser: Parser::new(),
+            dirty: true,
+            responses: Vec::new(),
+            is_alt_screen: false,
+            alt_screen: None,
+            scroll_region_top: 0,
+            scroll_region_bottom,
+            bracketed_paste: false,
+            mouse_reporting: false,
+            sgr_mouse: false,
+            hyperlinks: Vec::new(),
+            current_hyperlink_idx: 0,
+        }
+    }
+
+    pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
+        let new_cols = new_cols.max(10);
+        let new_rows = new_rows.max(5);
+        if new_cols == self.cols && new_rows == self.rows {
+            return;
+        }
+
+        let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+        for r in 0..self.rows.min(new_rows) {
+            let copy_len = self.cols.min(new_cols);
+            new_cells[r][..copy_len].copy_from_slice(&self.cells[r][..copy_len]);
+        }
+
+        if let Some(alt) = &mut self.alt_screen {
+            let mut new_alt = vec![vec![Cell::default(); new_cols]; new_rows];
+            for r in 0..self.rows.min(new_rows) {
+                let copy_len = self.cols.min(new_cols);
+                new_alt[r][..copy_len].copy_from_slice(&alt[r][..copy_len]);
+            }
+            *alt = new_alt;
+        }
+
+        self.cols = new_cols;
+        self.rows = new_rows;
+        self.scroll_region_top = 0;
+        self.scroll_region_bottom = new_rows.saturating_sub(1);
+        self.cursor_x = self.cursor_x.min(new_cols - 1);
+        self.cursor_y = self.cursor_y.min(new_rows - 1);
+        self.cells = new_cells;
+        self.scroll_offset = 0;
+        self.target_scroll_y = 0.0;
+        self.current_scroll_y = 0.0;
+        self.dirty = true;
+    }
+
+    pub fn advance_bytes(&mut self, bytes: &[u8]) {
+        let mut parser = std::mem::replace(&mut self.parser, Parser::new());
+        parser.advance(self, bytes);
+        self.parser = parser;
+    }
+
+    #[inline]
+    pub fn content_lines_in_scrollback(&self) -> usize {
+        self.scrollback.len()
+    }
+
+    /// Scrolls the active region upward by 1 row in `O(1)` using `VecDeque` and buffer recycling.
+    pub fn scroll_region_up(&mut self) {
+        if self.rows == 0
+            || self.scroll_region_top >= self.scroll_region_bottom
+            || self.scroll_region_bottom >= self.rows
+        {
+            return;
+        }
+
+        if self.scroll_region_top == 0
+            && self.scroll_region_bottom == self.rows - 1
+            && !self.is_alt_screen
+        {
+            let mut line = self.cells.remove(0);
+            let has_content = line.iter().any(|c| c.c != ' ' || c.style.bg.is_some());
+
+            let push_to_sb = if has_content {
+                true
+            } else if !self.scrollback.is_empty() {
+                let last_empty = self.scrollback.back().map_or(false, |l| {
+                    !l.iter().any(|c| c.c != ' ' || c.style.bg.is_some())
+                });
+                !last_empty
+            } else {
+                false
+            };
+
+            if push_to_sb {
+                if self.scrollback.len() >= self.max_scrollback {
+                    // Recycle the oldest scrollback row buffer directly into the new bottom row (0 heap alloc!)
+                    let mut oldest = self
+                        .scrollback
+                        .pop_front()
+                        .unwrap_or_else(|| vec![Cell::default(); self.cols]);
+                    oldest.resize(self.cols, Cell::default());
+                    oldest.fill(Cell::default());
+                    self.scrollback.push_back(line);
+                    self.cells.push(oldest);
+
+                    if let Some(sel) = &mut self.selection {
+                        if sel.anchor.abs_row > 0 {
+                            sel.anchor.abs_row -= 1;
+                        }
+                        if sel.active.abs_row > 0 {
+                            sel.active.abs_row -= 1;
+                        }
+                    }
+                } else {
+                    self.scrollback.push_back(line);
+                    self.cells.push(vec![Cell::default(); self.cols]);
+                }
+            } else {
+                // Recycle the blank top line directly as the new blank bottom line (0 heap alloc!)
+                line.fill(Cell::default());
+                self.cells.push(line);
+            }
+        } else {
+            let mut recycled = self.cells.remove(self.scroll_region_top);
+            recycled.fill(Cell::default());
+            self.cells.insert(self.scroll_region_bottom, recycled);
+        }
+        self.dirty = true;
+    }
+
+    pub fn scroll_region_down(&mut self) {
+        if self.rows == 0
+            || self.scroll_region_top >= self.scroll_region_bottom
+            || self.scroll_region_bottom >= self.rows
+        {
+            return;
+        }
+        let mut recycled = self.cells.remove(self.scroll_region_bottom);
+        recycled.fill(Cell::default());
+        self.cells.insert(self.scroll_region_top, recycled);
+        self.dirty = true;
+    }
+
+    #[allow(dead_code)]
+    pub fn scroll_up(&mut self) {
+        self.scroll_region_up();
+    }
+
+    pub fn scroll_up_view(&mut self, lines: usize) {
+        if self.is_alt_screen {
+            return;
+        }
+        let max_scroll = self.content_lines_in_scrollback();
+        if max_scroll == 0 {
+            return;
+        }
+        self.scroll_offset = (self.scroll_offset + lines).min(max_scroll);
+        self.dirty = true;
+    }
+
+    pub fn scroll_down_view(&mut self, lines: usize) {
+        if self.is_alt_screen {
+            return;
+        }
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        self.dirty = true;
+    }
+
+    pub fn scroll_up_pixels(&mut self, pixels: f32, cell_h: f32) {
+        if self.is_alt_screen {
+            return;
+        }
+        self.cell_height = cell_h.max(1.0);
+        let max_pixels = self.content_lines_in_scrollback() as f32 * self.cell_height;
+        if max_pixels <= 0.0 {
+            self.target_scroll_y = 0.0;
+            self.current_scroll_y = 0.0;
+            return;
+        }
+        self.target_scroll_y = (self.target_scroll_y + pixels).clamp(0.0, max_pixels);
+    }
+
+    pub fn scroll_down_pixels(&mut self, pixels: f32, cell_h: f32) {
+        if self.is_alt_screen {
+            return;
+        }
+        self.cell_height = cell_h.max(1.0);
+        let max_pixels = self.content_lines_in_scrollback() as f32 * self.cell_height;
+        if max_pixels <= 0.0 {
+            self.target_scroll_y = 0.0;
+            self.current_scroll_y = 0.0;
+            return;
+        }
+        self.target_scroll_y = (self.target_scroll_y - pixels).clamp(0.0, max_pixels);
+    }
+
+    /// Interpolates `current_scroll_y` toward `target_scroll_y` without forcing full text re-shaping
+    /// unless the integer row offset crosses a row boundary.
+    pub fn update_smooth_scroll(&mut self, dt: f32) -> bool {
+        let diff = self.target_scroll_y - self.current_scroll_y;
+        if diff.abs() > 0.05 {
+            let factor = 1.0 - (-24.0 * dt).exp();
+            self.current_scroll_y += diff * factor;
+            true
+        } else if self.current_scroll_y != self.target_scroll_y {
+            self.current_scroll_y = self.target_scroll_y;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        if self.scroll_offset != 0 || self.target_scroll_y != 0.0 || self.current_scroll_y != 0.0 {
+            self.scroll_offset = 0;
+            self.target_scroll_y = 0.0;
+            self.current_scroll_y = 0.0;
+            self.dirty = true;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn visible_row(&self, screen_r: usize) -> &[Cell] {
+        let effective_offset = if self.current_scroll_y > 0.0 {
+            (self.current_scroll_y / self.cell_height.max(1.0)).floor() as usize
+        } else {
+            self.scroll_offset
+        };
+        self.visible_row_at(screen_r, effective_offset)
+    }
+
+    pub fn visible_row_at(&self, screen_r: usize, base_offset: usize) -> &[Cell] {
+        if base_offset == 0 {
+            if screen_r < self.cells.len() {
+                &self.cells[screen_r]
+            } else {
+                &[]
+            }
+        } else {
+            let sb_len = self.scrollback.len();
+            if base_offset > sb_len {
+                return &[];
+            }
+            let total_rows = sb_len + self.rows;
+            let start_idx = total_rows.saturating_sub(base_offset + self.rows);
+            let idx = start_idx + screen_r;
+            if idx < sb_len {
+                &self.scrollback[idx]
+            } else {
+                let cell_idx = idx - sb_len;
+                if cell_idx < self.cells.len() {
+                    &self.cells[cell_idx]
+                } else {
+                    &[]
+                }
+            }
+        }
+    }
+
+    pub fn screen_to_abs_row(&self, screen_row: usize) -> usize {
+        let sb_len = self.scrollback.len();
+        let total_rows = sb_len + self.rows;
+        let base_offset = if self.current_scroll_y > 0.0 {
+            (self.current_scroll_y / self.cell_height.max(1.0)).floor() as usize
+        } else {
+            self.scroll_offset
+        };
+        let start_idx = total_rows.saturating_sub(base_offset + self.rows);
+        start_idx + screen_row
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::cell::ansi_16_color;
+
+    #[test]
+    fn test_cell_memory_compaction() {
+        assert_eq!(std::mem::size_of::<CellStyle>(), 13);
+        assert_eq!(std::mem::size_of::<Cell>(), 20);
+    }
+
+    #[test]
+    fn test_print_and_backspace() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes(b"hello");
+        assert_eq!(grid.cursor_x, 5);
+        assert_eq!(grid.cells[0][0].c, 'h');
+        assert_eq!(grid.cells[0][4].c, 'o');
+
+        grid.advance_bytes(b"\x08");
+        assert_eq!(grid.cursor_x, 4);
+
+        grid.advance_bytes(b"\x1b[K");
+        assert_eq!(grid.cells[0][4].c, ' ');
+    }
+
+    #[test]
+    fn test_typing_spans_visibility() {
+        let mut grid = TerminalGrid::new(40, 5);
+        grid.advance_bytes(b"PS C:\\> ");
+        assert_eq!(grid.cursor_x, 8);
+
+        grid.advance_bytes(b"\x1b[?25l\x1b[93mgit \x1b[37mstatus\x1b[?25h");
+        assert_eq!(grid.cursor_x, 18);
+        assert_eq!(grid.cells[0][8].c, 'g');
+        assert_eq!(grid.cells[0][17].c, 's');
+
+        let (spans, _bg) = grid.render_spans_and_backgrounds(10.0, 20.0, 10.0, 10.0);
+        let joined: String = spans.iter().map(|(s, _)| s.as_str()).collect();
+        assert!(joined.starts_with("PS C:\\> git status"));
+    }
+
+    #[test]
+    fn test_sgr_colors() {
+        let mut grid = TerminalGrid::new(40, 5);
+        grid.advance_bytes(b"\x1b[31mhi");
+        assert_eq!(grid.cells[0][0].c, 'h');
+        assert_eq!(grid.cells[0][0].style.fg, Some(ansi_16_color(1)));
+
+        grid.advance_bytes(b"\x1b[48;2;138;173;244m\x1b[38;2;255;255;255m!");
+        assert_eq!(grid.cells[0][2].c, '!');
+        assert_eq!(grid.cells[0][2].style.bg, Some(ColorRgb { r: 138, g: 173, b: 244 }));
+        assert_eq!(grid.cells[0][2].style.fg, Some(ColorRgb { r: 255, g: 255, b: 255 }));
+
+        grid.advance_bytes(b"\x1b[m?");
+        assert_eq!(grid.cells[0][3].c, '?');
+        assert_eq!(grid.cells[0][3].style.fg, None);
+        assert_eq!(grid.cells[0][3].style.bg, None);
+    }
+
+    #[test]
+    fn test_scrollback_and_recycling() {
+        let mut grid = TerminalGrid::new(10, 5);
+        grid.max_scrollback = 3;
+        grid.advance_bytes(b"line 1\r\nline 2\r\nline 3\r\nline 4\r\nline 5\r\nline 6\r\nline 7");
+        assert_eq!(grid.scrollback.len(), 2);
+        assert_eq!(grid.scrollback[0][0].c, 'l');
+        assert_eq!(grid.scrollback[0][5].c, '1');
+
+        grid.scroll_up_view(1);
+        assert_eq!(grid.scroll_offset, 1);
+        let top_row = grid.visible_row(0);
+        assert_eq!(top_row[5].c, '2');
+
+        grid.scroll_to_bottom();
+        assert_eq!(grid.scroll_offset, 0);
+
+        let mut fresh = TerminalGrid::new(10, 5);
+        fresh.scroll_up_view(5);
+        assert_eq!(fresh.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_selection_and_run_length_merging() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes(b"hello world\r\nsecond line");
+
+        grid.selection = Some(Selection {
+            anchor: SelectionPoint { col: 6, abs_row: 0 },
+            active: SelectionPoint { col: 10, abs_row: 0 },
+        });
+        assert!(grid.has_selection());
+        assert_eq!(grid.get_selected_text(), Some("world".to_string()));
+
+        grid.selection = Some(Selection {
+            anchor: SelectionPoint { col: 10, abs_row: 0 },
+            active: SelectionPoint { col: 6, abs_row: 0 },
+        });
+        assert_eq!(grid.get_selected_text(), Some("world".to_string()));
+
+        grid.selection = Some(Selection {
+            anchor: SelectionPoint { col: 6, abs_row: 0 },
+            active: SelectionPoint { col: 5, abs_row: 1 },
+        });
+        let selected = grid.get_selected_text().unwrap();
+        assert_eq!(selected, "world\r\nsecond");
+
+        let (_, bg_rects) = grid.render_spans_and_backgrounds(8.0, 16.0, 16.0, 16.0);
+        assert!(!bg_rects.is_empty());
+        assert_eq!(bg_rects[0].color, grid.selection_color);
+
+        grid.clear_selection();
+        assert!(!grid.has_selection());
+        assert_eq!(grid.get_selected_text(), None);
+
+        let mut empty_grid = TerminalGrid::new(20, 5);
+        empty_grid.advance_bytes(b"prompt>");
+        assert_eq!(empty_grid.last_content_abs_row(), Some(0));
+        assert_eq!(empty_grid.abs_row_content_len(0), 7);
+        assert_eq!(empty_grid.abs_row_content_len(1), 0);
+
+        empty_grid.selection = Some(Selection {
+            anchor: SelectionPoint { col: 0, abs_row: 0 },
+            active: SelectionPoint { col: 19, abs_row: 4 },
+        });
+
+        assert_eq!(empty_grid.get_selected_text(), Some("prompt>".to_string()));
+
+        // Run-Length Merging coalesces the 7 contiguous selected cells into 1 BgRect of width 56.0
+        let cell_w = 8.0;
+        let cell_h = 16.0;
+        let pad_x = 10.0;
+        let pad_y = 10.0;
+        let (_, bg_rects) = empty_grid.render_spans_and_backgrounds(cell_w, cell_h, pad_x, pad_y);
+        assert_eq!(bg_rects.len(), 1);
+        assert_eq!(bg_rects[0].y, pad_y);
+        assert_eq!(bg_rects[0].w, 7.0 * cell_w);
+        assert_eq!(bg_rects[0].color, empty_grid.selection_color);
+    }
+
+    #[test]
+    fn test_osc_window_title() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes(b"\x1b]0;My Custom PowerShell\x07");
+        assert_eq!(grid.title, "My Custom PowerShell");
+
+        grid.advance_bytes(b"\x1b]2;nvim main.rs\x07");
+        assert_eq!(grid.title, "nvim main.rs");
+    }
+
+    #[test]
+    fn test_decscusr_cursor_shapes() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes(b"\x1b[5 q");
+        assert_eq!(grid.cursor_config.shape, CursorShape::Beam);
+        assert!(grid.cursor_config.blinking);
+
+        grid.advance_bytes(b"\x1b[2 q");
+        assert_eq!(grid.cursor_config.shape, CursorShape::Block);
+        assert!(!grid.cursor_config.blinking);
+
+        grid.advance_bytes(b"\x1b[3 q");
+        assert_eq!(grid.cursor_config.shape, CursorShape::Underline);
+        assert!(grid.cursor_config.blinking);
+    }
+
+    #[test]
+    fn test_decorations_underline_strikethrough_undercurl() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes(b"\x1b[9mtest\x1b[29m");
+        assert!(grid.cells[0][0].style.strikethrough());
+        assert!(!grid.cells[0][4].style.strikethrough());
+
+        grid.advance_bytes(b"\x1b[4m\x1b[58;2;255;0;0merror");
+        assert!(grid.cells[0][4].style.underline());
+        assert_eq!(
+            grid.cells[0][4].style.underline_color,
+            Some(ColorRgb { r: 255, g: 0, b: 0 })
+        );
+    }
+
+    #[test]
+    fn test_alternate_screen_buffer() {
+        let mut grid = TerminalGrid::new(10, 5);
+        grid.advance_bytes(b"primary");
+        assert_eq!(grid.cells[0][0].c, 'p');
+
+        grid.advance_bytes(b"\x1b[?1049h");
+        assert!(grid.is_alt_screen);
+        assert_eq!(grid.cells[0][0].c, ' ');
+
+        grid.advance_bytes(b"nvim");
+        assert_eq!(grid.cells[0][0].c, 'n');
+
+        grid.advance_bytes(b"\x1b[?1049l");
+        assert!(!grid.is_alt_screen);
+        assert_eq!(grid.cells[0][0].c, 'p');
+    }
+
+    #[test]
+    fn test_win32_input_mode_ignored() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes(b"\x1b[67;0;99;1;0;1_");
+        assert_eq!(grid.cells[0][0].c, ' ');
+    }
+
+    #[test]
+    fn test_procedural_box_and_powerline() {
+        let mut grid = TerminalGrid::new(10, 5);
+        grid.advance_bytes("─\u{E0B0}".as_bytes());
+        let (spans, bg_rects) = grid.render_spans_and_backgrounds(10.0, 20.0, 0.0, 0.0);
+        assert_eq!(spans[0].0, "  ");
+        assert!(!bg_rects.is_empty());
+    }
+
+    #[test]
+    fn test_scroll_region_and_bounded_scrolling() {
+        let mut grid = TerminalGrid::new(10, 5);
+        grid.advance_bytes(b"HEADER\r\n");
+        grid.advance_bytes(b"row1\r\nrow2\r\nrow3\r\n");
+        grid.advance_bytes(b"STATUS");
+
+        assert_eq!(grid.cells[0][0].c, 'H');
+        assert_eq!(grid.cells[4][0].c, 'S');
+
+        grid.advance_bytes(b"\x1b[2;4r");
+        assert_eq!(grid.scroll_region_top, 1);
+        assert_eq!(grid.scroll_region_bottom, 3);
+        assert_eq!(grid.cursor_x, 0);
+        assert_eq!(grid.cursor_y, 0);
+
+        grid.advance_bytes(b"\x1b[4;1H");
+        assert_eq!(grid.cursor_y, 3);
+        grid.advance_bytes(b"new4\r\n");
+
+        assert_eq!(grid.cells[0][0].c, 'H');
+        assert_eq!(grid.cells[4][0].c, 'S');
+        assert_eq!(grid.scrollback.len(), 0);
+    }
+
+    #[test]
+    fn test_sgr_mouse_and_bracketed_paste_modes() {
+        let mut grid = TerminalGrid::new(20, 5);
+
+        grid.advance_bytes(b"\x1b[?2004h");
+        assert!(grid.bracketed_paste);
+        grid.advance_bytes(b"\x1b[?2004l");
+        assert!(!grid.bracketed_paste);
+
+        grid.advance_bytes(b"\x1b[?1000h");
+        assert!(grid.mouse_reporting);
+        grid.advance_bytes(b"\x1b[?1000l");
+        assert!(!grid.mouse_reporting);
+
+        grid.advance_bytes(b"\x1b[?1006h");
+        assert!(grid.sgr_mouse);
+        grid.advance_bytes(b"\x1b[?1006l");
+        assert!(!grid.sgr_mouse);
+    }
+
+    #[test]
+    fn test_word_and_line_selection() {
+        let mut grid = TerminalGrid::new(30, 5);
+        grid.advance_bytes(b"git checkout -b feature-foo");
+
+        grid.select_word_at(6, 0);
+        assert_eq!(grid.get_selected_text(), Some("checkout".to_string()));
+
+        grid.select_word_at(18, 0);
+        assert_eq!(grid.get_selected_text(), Some("feature-foo".to_string()));
+
+        grid.select_line_at(0);
+        assert_eq!(
+            grid.get_selected_text(),
+            Some("git checkout -b feature-foo".to_string())
+        );
+    }
+
+    #[test]
+    fn test_procedural_rounded_corners_and_blocks() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes("╭╮╯╰█═║░".as_bytes());
+        let (spans, bg_rects) = grid.render_spans_and_backgrounds(10.0, 20.0, 0.0, 0.0);
+        assert_eq!(spans[0].0, "        ");
+        assert!(!bg_rects.is_empty());
+    }
+
+    #[test]
+    fn test_osc_8_hyperlinks() {
+        let mut grid = TerminalGrid::new(30, 5);
+        grid.advance_bytes(b"\x1b]8;;https://github.com\x1b\\GitHub Repo\x1b]8;;\x1b\\");
+
+        assert!(grid.cells[0][0].hyperlink_idx > 0);
+        assert_eq!(
+            grid.get_hyperlink_at(3, 0),
+            Some("https://github.com".to_string())
+        );
+
+        let mut plain_grid = TerminalGrid::new(40, 5);
+        plain_grid.advance_bytes(b"visit https://example.com for info");
+        assert_eq!(
+            plain_grid.get_hyperlink_at(10, 0),
+            Some("https://example.com".to_string())
+        );
+    }
+}

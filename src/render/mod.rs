@@ -1,3 +1,9 @@
+//! GPU text rendering (`glyphon`) and batched background quad pipeline (`wgpu`).
+//!
+//! Optimization highlights:
+//! - Reuses an internal `scratch_vertices: Vec<BgVertex>` buffer across frames so uploading
+//!   background and decoration quads requires zero heap allocations in the render hot-path.
+
 use crate::terminal::{BgRect, CellStyle};
 use bytemuck::{Pod, Zeroable};
 use glyphon::{
@@ -66,12 +72,12 @@ pub struct TextEngine {
     pub bg_vertex_buffer: wgpu::Buffer,
     pub bg_vertex_capacity: usize,
     pub bg_vertex_count: u32,
+    scratch_vertices: Vec<BgVertex>,
 }
 
 impl TextEngine {
     pub fn resolve_family_name(font_system: &FontSystem, preferred: &str) -> (String, bool) {
         let db = font_system.db();
-        // 1. Check if user-configured font exists (case-insensitive)
         if !preferred.trim().is_empty() {
             let pref = preferred.trim();
             for face in db.faces() {
@@ -83,7 +89,6 @@ impl TextEngine {
             }
         }
 
-        // 2. Candidate list of high-quality developer & Nerd fonts installed on the system
         let candidates = [
             "0xProto Nerd Font Mono",
             "0xProto Nerd Font",
@@ -108,7 +113,6 @@ impl TextEngine {
             }
         }
 
-        // 3. Fallback to system Monospace family
         (db.family_name(&Family::Monospace).to_string(), false)
     }
 
@@ -148,7 +152,6 @@ impl TextEngine {
         let line_height = (font_size * 1.5).round().max(10.0);
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(font_size, line_height));
 
-        // Measure monospaced cell metrics using 'M'
         buffer.set_text(
             "M",
             &Attrs::new().family(Family::Name(&resolved_font)),
@@ -165,10 +168,9 @@ impl TextEngine {
             .unwrap_or(8.7);
         let cell_height = line_height;
 
-        // Background Quads Pipeline Setup
         let bg_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Bg Shader"),
-            source: ShaderSource::Wgsl(include_str!("bg.wgsl").into()),
+            source: ShaderSource::Wgsl(include_str!("shaders/bg.wgsl").into()),
         });
 
         let bg_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -241,7 +243,7 @@ impl TextEngine {
             cache: None,
         });
 
-        let initial_capacity = 1024;
+        let initial_capacity = 2048;
         let bg_vertex_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Bg Vertex Buffer"),
             size: (initial_capacity * std::mem::size_of::<BgVertex>()) as u64,
@@ -269,6 +271,7 @@ impl TextEngine {
             bg_vertex_buffer,
             bg_vertex_capacity: initial_capacity,
             bg_vertex_count: 0,
+            scratch_vertices: Vec::with_capacity(initial_capacity),
         }
     }
 
@@ -281,13 +284,18 @@ impl TextEngine {
                 height: screen_h.max(1.0) as u32,
             },
         );
-        queue.write_buffer(&self.bg_uniform_buffer, 0, bytemuck::cast_slice(&self.screen_size));
+        queue.write_buffer(
+            &self.bg_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&self.screen_size),
+        );
     }
 
     pub fn update_font_size(&mut self, font_size: f32) {
         self.font_size = font_size;
         self.line_height = (font_size * 1.5).round().max(10.0);
-        self.buffer.set_metrics(Metrics::new(self.font_size, self.line_height));
+        self.buffer
+            .set_metrics(Metrics::new(self.font_size, self.line_height));
         self.buffer.set_text(
             "M",
             &Attrs::new().family(Family::Name(&self.font_family)),
@@ -316,7 +324,9 @@ impl TextEngine {
             );
         }
         self.font_family = resolved_font;
-        self.font_system.db_mut().set_monospace_family(&self.font_family);
+        self.font_system
+            .db_mut()
+            .set_monospace_family(&self.font_family);
         self.update_font_size(self.font_size);
     }
 
@@ -328,37 +338,23 @@ impl TextEngine {
         spans: &[(String, CellStyle)],
         bg_rects: &[BgRect],
     ) {
-        let family = Family::Name(&self.font_family);
-        let default_attrs = Attrs::new()
-            .family(family)
-            .color(Color::rgb(205, 214, 244));
+        let mut tmp = Buffer::new(&mut self.font_system, Metrics::new(self.font_size, self.line_height));
+        std::mem::swap(&mut tmp, &mut self.buffer);
+        self.shape_buffer(&mut tmp, spans);
+        std::mem::swap(&mut tmp, &mut self.buffer);
+        self.update_bg_rects(device, queue, bg_rects);
+    }
 
-        let rich_spans: Vec<(&str, Attrs)> = spans
-            .iter()
-            .map(|(text, style)| {
-                let mut attrs = Attrs::new().family(family);
-                if let Some(fg) = style.fg {
-                    attrs = attrs.color(Color::rgb(fg.r, fg.g, fg.b));
-                } else {
-                    attrs = attrs.color(Color::rgb(205, 214, 244));
-                }
-                if style.bold {
-                    attrs = attrs.weight(Weight::BOLD);
-                }
-                if style.italic {
-                    attrs = attrs.style(Style::Italic);
-                }
-                (text.as_str(), attrs)
-            })
-            .collect();
-
-        self.buffer.set_rich_text(rich_spans, &default_attrs, Shaping::Advanced, None);
-        self.buffer.shape_until_scroll(&mut self.font_system, false);
-
-        // Upload background quads
+    /// Uploads background quads using the pre-allocated `scratch_vertices` buffer (zero heap alloc).
+    pub fn update_bg_rects(&mut self, device: &Device, queue: &Queue, bg_rects: &[BgRect]) {
         let num_vertices = bg_rects.len() * 6;
         if num_vertices > 0 {
-            let mut vertices = Vec::with_capacity(num_vertices);
+            self.scratch_vertices.clear();
+            if self.scratch_vertices.capacity() < num_vertices {
+                self.scratch_vertices
+                    .reserve(num_vertices - self.scratch_vertices.capacity());
+            }
+
             for rect in bg_rects {
                 let c = [
                     rect.color.r as f32 / 255.0,
@@ -371,77 +367,56 @@ impl TextEngine {
                 let x1 = rect.x + rect.w;
                 let y1 = rect.y + rect.h;
 
-                vertices.push(BgVertex { position: [x0, y0], color: c });
-                vertices.push(BgVertex { position: [x1, y0], color: c });
-                vertices.push(BgVertex { position: [x1, y1], color: c });
-                vertices.push(BgVertex { position: [x0, y0], color: c });
-                vertices.push(BgVertex { position: [x1, y1], color: c });
-                vertices.push(BgVertex { position: [x0, y1], color: c });
+                self.scratch_vertices
+                    .push(BgVertex { position: [x0, y0], color: c });
+                self.scratch_vertices
+                    .push(BgVertex { position: [x1, y0], color: c });
+                self.scratch_vertices
+                    .push(BgVertex { position: [x1, y1], color: c });
+                self.scratch_vertices
+                    .push(BgVertex { position: [x0, y0], color: c });
+                self.scratch_vertices
+                    .push(BgVertex { position: [x1, y1], color: c });
+                self.scratch_vertices
+                    .push(BgVertex { position: [x0, y1], color: c });
             }
 
             if num_vertices > self.bg_vertex_capacity {
-                self.bg_vertex_capacity = num_vertices.max(1024);
-                self.bg_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                self.bg_vertex_capacity = num_vertices.next_power_of_two().max(2048);
+                self.bg_vertex_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Terminal Bg Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&vertices),
+                    size: (self.bg_vertex_capacity * std::mem::size_of::<BgVertex>()) as u64,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
                 });
-            } else {
-                queue.write_buffer(&self.bg_vertex_buffer, 0, bytemuck::cast_slice(&vertices));
             }
+            queue.write_buffer(
+                &self.bg_vertex_buffer,
+                0,
+                bytemuck::cast_slice(&self.scratch_vertices),
+            );
             self.bg_vertex_count = num_vertices as u32;
         } else {
             self.bg_vertex_count = 0;
         }
     }
 
-    pub fn update_bg_rects(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        bg_rects: &[BgRect],
-    ) {
-        let num_vertices = bg_rects.len() * 6;
-        if num_vertices > 0 {
-            let mut vertices = Vec::with_capacity(num_vertices);
-            for rect in bg_rects {
-                let c = [
-                    rect.color.r as f32 / 255.0,
-                    rect.color.g as f32 / 255.0,
-                    rect.color.b as f32 / 255.0,
-                    rect.alpha,
-                ];
-                let x0 = rect.x;
-                let y0 = rect.y;
-                let x1 = rect.x + rect.w;
-                let y1 = rect.y + rect.h;
-
-                vertices.push(BgVertex { position: [x0, y0], color: c });
-                vertices.push(BgVertex { position: [x1, y0], color: c });
-                vertices.push(BgVertex { position: [x1, y1], color: c });
-                vertices.push(BgVertex { position: [x0, y0], color: c });
-                vertices.push(BgVertex { position: [x1, y1], color: c });
-                vertices.push(BgVertex { position: [x0, y1], color: c });
-            }
-
-            if num_vertices > self.bg_vertex_capacity {
-                self.bg_vertex_capacity = num_vertices.max(1024);
-                self.bg_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Terminal Bg Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&vertices),
-                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                });
-            } else {
-                queue.write_buffer(&self.bg_vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-            }
-            self.bg_vertex_count = num_vertices as u32;
-        } else {
-            self.bg_vertex_count = 0;
-        }
+    /// Returns the shaped horizontal pixel width of a `glyphon::Buffer`.
+    pub fn measure_buffer_width(buffer: &Buffer) -> f32 {
+        buffer
+            .layout_runs()
+            .map(|r| {
+                let glyph_w: f32 = r.glyphs.iter().map(|g| g.w).sum();
+                r.line_w.max(glyph_w)
+            })
+            .fold(0.0f32, f32::max)
     }
 
     pub fn create_buffer(&mut self) -> Buffer {
-        Buffer::new(&mut self.font_system, Metrics::new(self.font_size, self.line_height))
+        Buffer::new(
+            &mut self.font_system,
+            Metrics::new(self.font_size, self.line_height),
+        )
     }
 
     pub fn shape_buffer(&mut self, buffer: &mut Buffer, spans: &[(String, CellStyle)]) {
@@ -450,35 +425,28 @@ impl TextEngine {
             .family(family)
             .color(Color::rgb(205, 214, 244));
 
-        let rich_spans: Vec<(&str, Attrs)> = spans
-            .iter()
-            .map(|(text, style)| {
-                let mut attrs = Attrs::new().family(family);
-                if let Some(fg) = style.fg {
-                    attrs = attrs.color(Color::rgb(fg.r, fg.g, fg.b));
-                } else {
-                    attrs = attrs.color(Color::rgb(205, 214, 244));
-                }
-                if style.bold {
-                    attrs = attrs.weight(Weight::BOLD);
-                }
-                if style.italic {
-                    attrs = attrs.style(Style::Italic);
-                }
-                (text.as_str(), attrs)
-            })
-            .collect();
+        let rich_spans = spans.iter().map(|(text, style)| {
+            let mut attrs = Attrs::new().family(family);
+            if let Some(fg) = style.fg {
+                attrs = attrs.color(Color::rgb(fg.r, fg.g, fg.b));
+            } else {
+                attrs = attrs.color(Color::rgb(205, 214, 244));
+            }
+            if style.bold() {
+                attrs = attrs.weight(Weight::BOLD);
+            }
+            if style.italic() {
+                attrs = attrs.style(Style::Italic);
+            }
+            (text.as_str(), attrs)
+        });
 
         buffer.set_rich_text(rich_spans, &default_attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
     }
 
-    pub fn prepare_areas<'a, I>(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        areas: I,
-    ) where
+    pub fn prepare_areas<'a, I>(&mut self, device: &Device, queue: &Queue, areas: I)
+    where
         I: IntoIterator<Item = TextArea<'a>>,
     {
         let _ = self.renderer.prepare(
@@ -522,11 +490,10 @@ impl TextEngine {
             pass.set_vertex_buffer(0, self.bg_vertex_buffer.slice(..));
             pass.draw(0..self.bg_vertex_count, 0..1);
         }
-        let _ = self
-            .renderer
-            .render(&self.atlas, &self.viewport, pass);
+        let _ = self.renderer.render(&self.atlas, &self.viewport, pass);
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -535,8 +502,12 @@ mod tests {
     #[test]
     fn test_missing_font() {
         let mut font_system = FontSystem::new();
-        let (resolved, is_direct) = TextEngine::resolve_family_name(&font_system, "JetBrainsMono Nerd Font");
-        println!("Requested: 'JetBrainsMono Nerd Font', Resolved: '{}', is_direct: {}", resolved, is_direct);
+        let (resolved, is_direct) =
+            TextEngine::resolve_family_name(&font_system, "JetBrainsMono Nerd Font");
+        println!(
+            "Requested: 'JetBrainsMono Nerd Font', Resolved: '{}', is_direct: {}",
+            resolved, is_direct
+        );
         assert_eq!(resolved, "0xProto Nerd Font Mono");
 
         font_system.db_mut().set_monospace_family(&resolved);
@@ -550,10 +521,16 @@ mod tests {
         );
         buffer.shape_until_scroll(&mut font_system, false);
         for run in buffer.layout_runs() {
-            println!("Run line_top={}, line_height={}", run.line_top, run.line_height);
+            println!(
+                "Run line_top={}, line_height={}",
+                run.line_top, run.line_height
+            );
             for glyph in run.glyphs {
                 if let Some(face) = font_system.db().face(glyph.font_id) {
-                    println!("  c='{}' w={} font={:?}", glyph.glyph_id, glyph.w, face.post_script_name);
+                    println!(
+                        "  c='{}' w={} font={:?}",
+                        glyph.glyph_id, glyph.w, face.post_script_name
+                    );
                 }
             }
         }

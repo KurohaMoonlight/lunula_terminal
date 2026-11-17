@@ -1,0 +1,134 @@
+//! ConPTY process management and lock-free wake coalescing reader thread.
+//!
+//! Optimization highlights:
+//! - Uses `wake_pending: Arc<AtomicBool>` so high-throughput streams (`cargo build`, large `cat`)
+//!   do not flood the Win32 message queue with redundant `EventLoopProxy::send_event(())` calls.
+//! - Uses `exited: Arc<AtomicBool>` set immediately on EOF (`n == 0`) or pipe close so the main
+//!   thread can check process liveness in `O(1)` without per-frame OS `try_wait()` syscalls.
+
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
+use std::thread;
+use winit::event_loop::EventLoopProxy;
+
+pub struct PtyManager {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn Child + Send + Sync>,
+    pub rx: Receiver<Vec<u8>>,
+    pub exited: Arc<AtomicBool>,
+    pub wake_pending: Arc<AtomicBool>,
+}
+
+impl PtyManager {
+    pub fn new(
+        cols: u16,
+        rows: u16,
+        proxy: EventLoopProxy<()>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let pty_system = native_pty_system();
+        let size = PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+
+        let pair = pty_system.openpty(size)?;
+
+        // Default to powershell.exe on Windows
+        let mut cmd = CommandBuilder::new("powershell.exe");
+        cmd.arg("-NoLogo");
+
+        // Ensure built-in `luna.exe` (next to lunula_terminal.exe) is automatically on PATH
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let current_path = std::env::var("PATH").unwrap_or_default();
+                let new_path = format!("{};{}", exe_dir.display(), current_path);
+                cmd.env("PATH", new_path);
+            }
+        }
+        cmd.env("EDITOR", "luna");
+
+        let child = pair.slave.spawn_command(cmd)?;
+
+        let mut reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
+
+        let (tx, rx) = channel();
+        let exited = Arc::new(AtomicBool::new(false));
+        let wake_pending = Arc::new(AtomicBool::new(false));
+
+        let exited_clone = Arc::clone(&exited);
+        let wake_clone = Arc::clone(&wake_pending);
+
+        thread::Builder::new()
+            .name("conpty-reader".into())
+            .spawn(move || {
+                let mut buf = [0u8; 16384];
+                while let Ok(n) = reader.read(&mut buf) {
+                    if n == 0 {
+                        exited_clone.store(true, Ordering::Release);
+                        let _ = proxy.send_event(());
+                        break;
+                    }
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                    // Coalesce wake events: only post to winit event loop if not already pending
+                    if !wake_clone.swap(true, Ordering::AcqRel) {
+                        let _ = proxy.send_event(());
+                    }
+                }
+                exited_clone.store(true, Ordering::Release);
+                let _ = proxy.send_event(());
+            })?;
+
+        Ok(Self {
+            master: pair.master,
+            writer,
+            child,
+            rx,
+            exited,
+            wake_pending,
+        })
+    }
+
+    /// Clears the pending wake flag before draining the channel so new arrivals will trigger a wake.
+    #[inline]
+    pub fn clear_wake_flag(&self) {
+        self.wake_pending.store(false, Ordering::Release);
+    }
+
+    /// Fast O(1) check via atomic EOF flag, falling back to `try_wait()` only when needed.
+    #[inline]
+    pub fn is_child_alive(&mut self) -> bool {
+        if self.exited.load(Ordering::Acquire) {
+            return false;
+        }
+        match self.child.try_wait() {
+            Ok(None) => true,
+            _ => {
+                self.exited.store(true, Ordering::Release);
+                false
+            }
+        }
+    }
+
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        let _ = self.writer.write_all(bytes);
+        let _ = self.writer.flush();
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) {
+        let _ = self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+    }
+}

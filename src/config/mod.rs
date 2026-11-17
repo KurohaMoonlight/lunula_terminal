@@ -1,231 +1,18 @@
+//! Lua-based configuration loader (`lunula.lua`) with fallback resolution and hot-reload support.
+
+pub mod defaults;
+pub mod types;
+
+pub use defaults::DEFAULT_LUA_CONFIG;
+pub use types::*;
+
+use defaults::parse_color_value;
 use mlua::{Lua, Table, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug)]
-pub struct WindowConfig {
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub width_percent: f32,
-    pub height_percent: f32,
-    pub lock_size: bool,
-    pub opacity: f32,
-    pub title: String,
-}
-
-impl Default for WindowConfig {
-    fn default() -> Self {
-        Self {
-            width: None, // None = auto dynamically calculated from monitor
-            height: None,
-            width_percent: 0.62,
-            height_percent: 0.68,
-            lock_size: false,
-            opacity: 0.95,
-            title: "Lunula Terminal".to_string(),
-        }
-    }
-}
-
-impl WindowConfig {
-    pub fn get_effective_dimensions(&self, monitor_w: u32, monitor_h: u32) -> (u32, u32) {
-        if self.lock_size {
-            (self.width.unwrap_or(980), self.height.unwrap_or(640))
-        } else {
-            let def_w = ((monitor_w as f32) * self.width_percent).round() as u32;
-            let def_h = ((monitor_h as f32) * self.height_percent).round() as u32;
-            (
-                self.width.unwrap_or(def_w.max(640)),
-                self.height.unwrap_or(def_h.max(480)),
-            )
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct WobbleConfig {
-    pub stiffness: f32,
-    pub damping: f32,
-    pub max_deform: f32,
-    pub spring_shear: f32,
-}
-
-impl Default for WobbleConfig {
-    fn default() -> Self {
-        Self {
-            stiffness: 420.0,
-            damping: 7.0,
-            max_deform: 55.0,
-            spring_shear: 300.0,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TerminalConfig {
-    pub font_family: String,
-    pub font_size: f32,
-    pub max_scrollback: usize,
-}
-
-impl Default for TerminalConfig {
-    fn default() -> Self {
-        Self {
-            font_family: "JetBrainsMono Nerd Font".to_string(),
-            font_size: 14.5,
-            max_scrollback: 5000,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CursorConfig {
-    pub shape: String, // "block", "beam", "underline"
-    pub blinking: bool,
-    pub color: [u8; 3], // RGB
-    pub trail: bool,
-    pub trail_stiffness: f32,
-    pub trail_damping: f32,
-}
-
-impl Default for CursorConfig {
-    fn default() -> Self {
-        Self {
-            shape: "block".to_string(),
-            blinking: true,
-            color: [180, 190, 254], // Catppuccin Lavender (#b4befe)
-            trail: true,
-            trail_stiffness: 550.0,
-            trail_damping: 28.0,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ScrollConfig {
-    pub smooth: bool,
-    pub speed: f32,
-}
-
-impl Default for ScrollConfig {
-    fn default() -> Self {
-        Self {
-            smooth: true,
-            speed: 60.0,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TabsConfig {
-    pub show_single_tab: bool,
-    pub height: f32,
-    pub dim_inactive_panes: bool,
-    pub dim_opacity: f32,
-}
-
-impl Default for TabsConfig {
-    fn default() -> Self {
-        Self {
-            show_single_tab: false,
-            height: 32.0,
-            dim_inactive_panes: true,
-            dim_opacity: 0.35,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ColorsConfig {
-    pub selection: [u8; 3],
-}
-
-impl Default for ColorsConfig {
-    fn default() -> Self {
-        Self {
-            selection: [88, 91, 112], // Catppuccin Mocha Surface 2 (#585b70)
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct LunulaConfig {
-    pub window: WindowConfig,
-    pub wobble: WobbleConfig,
-    pub terminal: TerminalConfig,
-    pub cursor: CursorConfig,
-    pub scroll: ScrollConfig,
-    pub tabs: TabsConfig,
-    pub colors: ColorsConfig,
-}
-
-pub const DEFAULT_LUA_CONFIG: &str = r##"-- ==========================================================
---  Lunula Terminal Configuration (lunula.lua)
---  Customizable physics, visuals, fonts, cursor, and hot reload
--- ==========================================================
-
-return {
-    window = {
-        -- Lebar & tinggi: "auto" atau angka pixel (e.g. 1100, 700)
-        -- Jika "auto", Lunula otomatis menyesuaikan resolusi monitor aktif.
-        width = "auto",
-        height = "auto",
-        width_percent = 0.62,   -- 62% lebar layar saat auto
-        height_percent = 0.68,  -- 68% tinggi layar saat auto
-        lock_size = false,      -- Jika true, ukuran tidak otomatis menyesuaikan layar
-        opacity = 0.95,         -- Transparansi jelly window (0.1 - 1.0)
-        title = "Lunula Terminal",
-    },
-    wobble = {
-        -- Kekakuan spring: Lebih tinggi = lebih kaku, Lebih rendah = lebih bergetar/jelly
-        stiffness = 420.0,
-        -- Damping: Kecepatan getaran berhenti
-        damping = 7.0,
-        -- Deformasi elastis maksimal saat drag window (pixel)
-        max_deform = 55.0,
-        -- Shear diagonal stiffness
-        spring_shear = 300.0,
-    },
-    terminal = {
-        font_family = "JetBrainsMono Nerd Font",
-        font_size = 14.5,
-        max_scrollback = 5000,
-    },
-    cursor = {
-        -- Bentuk kursor default: "block", "beam", atau "underline"
-        shape = "block",
-        -- Efek berkedip lembut (sine smooth blinking)
-        blinking = true,
-        -- Warna kursor (hex atau {r, g, b})
-        color = "#b4befe", -- Catppuccin Lavender
-        -- Kitty-style elastic cursor trail (ekor smear elastis saat kursor melompat)
-        trail = true,
-        trail_stiffness = 550.0,
-        trail_damping = 28.0,
-    },
-    scroll = {
-        -- Smooth sub-pixel scrolling (interpolasi pixel Y-offset 60-120 FPS)
-        smooth = true,
-        speed = 60.0,
-    },
-    tabs = {
-        -- Tampilkan bar tab meski hanya ada 1 tab (false = sembunyikan jika hanya 1 tab)
-        show_single_tab = false,
-        -- Tinggi tab bar dalam pixel (default: 32.0)
-        height = 32.0,
-        -- Efek redup / dimming pada split pane yang tidak aktif
-        dim_inactive_panes = true,
-        -- Tingkat kegelapan redup pada pane tidak aktif (0.0 = terang normal, 0.35 = redup elegan)
-        dim_opacity = 0.35,
-    },
-    colors = {
-        -- Warna highlight teks yang di-select mouse
-        selection = "#585b70",
-    },
-}
-"##;
-
 impl LunulaConfig {
+    /// Searches standard locations for `lunula.lua` or `config.lua`.
     pub fn find_config_path() -> Option<PathBuf> {
         let local = Path::new("lunula.lua");
         if local.exists() {
@@ -261,6 +48,7 @@ impl LunulaConfig {
         None
     }
 
+    /// Loads `lunula.lua` from disk, or generates the default configuration file if missing.
     pub fn load() -> Self {
         let config_path = match Self::find_config_path() {
             Some(path) => path,
@@ -292,6 +80,7 @@ impl LunulaConfig {
         }
     }
 
+    /// Evaluates a Lua configuration script into a validated `LunulaConfig`.
     pub fn parse_lua(script: &str) -> mlua::Result<Self> {
         let lua = Lua::new();
         let value: Value = lua.load(script).eval()?;
@@ -299,7 +88,6 @@ impl LunulaConfig {
         let mut config = Self::default();
 
         if let Value::Table(table) = value {
-            // Window table
             if let Ok(w_val) = table.get::<Table>("window") {
                 if let Ok(val) = w_val.get::<Value>("width") {
                     match val {
@@ -332,7 +120,6 @@ impl LunulaConfig {
                 }
             }
 
-            // Wobble table
             if let Ok(w_val) = table.get::<Table>("wobble") {
                 if let Ok(stiffness) = w_val.get::<f32>("stiffness") {
                     config.wobble.stiffness = stiffness.max(10.0);
@@ -348,7 +135,6 @@ impl LunulaConfig {
                 }
             }
 
-            // Terminal table
             if let Ok(t_val) = table.get::<Table>("terminal") {
                 if let Ok(ff) = t_val.get::<String>("font_family") {
                     config.terminal.font_family = ff;
@@ -361,7 +147,6 @@ impl LunulaConfig {
                 }
             }
 
-            // Cursor table
             if let Ok(cur_val) = table.get::<Table>("cursor") {
                 if let Ok(s) = cur_val.get::<String>("shape") {
                     config.cursor.shape = s.to_lowercase();
@@ -385,7 +170,6 @@ impl LunulaConfig {
                 }
             }
 
-            // Scroll table
             if let Ok(sc_val) = table.get::<Table>("scroll") {
                 if let Ok(sm) = sc_val.get::<bool>("smooth") {
                     config.scroll.smooth = sm;
@@ -395,7 +179,6 @@ impl LunulaConfig {
                 }
             }
 
-            // Tabs table
             if let Ok(tb_val) = table.get::<Table>("tabs") {
                 if let Ok(single) = tb_val.get::<bool>("show_single_tab") {
                     config.tabs.show_single_tab = single;
@@ -411,7 +194,6 @@ impl LunulaConfig {
                 }
             }
 
-            // Colors table
             if let Ok(c_val) = table.get::<Table>("colors") {
                 if let Ok(val) = c_val.get::<Value>("selection") {
                     if let Some(rgb) = parse_color_value(&val) {
@@ -425,30 +207,6 @@ impl LunulaConfig {
     }
 }
 
-fn parse_color_value(val: &Value) -> Option<[u8; 3]> {
-    match val {
-        Value::String(s) => {
-            let str_val = s.to_str().ok()?;
-            let hex = str_val.trim_start_matches('#');
-            if hex.len() == 6 {
-                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                Some([r, g, b])
-            } else {
-                None
-            }
-        }
-        Value::Table(t) => {
-            let r: u8 = t.get(1).ok()?;
-            let g: u8 = t.get(2).ok()?;
-            let b: u8 = t.get(3).ok()?;
-            Some([r, g, b])
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,8 +214,8 @@ mod tests {
     #[test]
     fn test_parse_default_config() {
         let cfg = LunulaConfig::parse_lua(DEFAULT_LUA_CONFIG).expect("parse default");
-        assert_eq!(cfg.window.width, None); // auto
-        assert_eq!(cfg.window.height, None); // auto
+        assert_eq!(cfg.window.width, None);
+        assert_eq!(cfg.window.height, None);
         assert_eq!(cfg.window.width_percent, 0.62);
         assert!((cfg.window.opacity - 0.95).abs() < 1e-4);
         assert_eq!(cfg.wobble.stiffness, 420.0);
@@ -504,7 +262,7 @@ mod tests {
         "#;
         let cfg = LunulaConfig::parse_lua(script).expect("parse partial");
         assert_eq!(cfg.window.width, Some(1100));
-        assert_eq!(cfg.window.height, None); // default auto
-        assert_eq!(cfg.wobble.stiffness, 420.0); // default
+        assert_eq!(cfg.window.height, None);
+        assert_eq!(cfg.wobble.stiffness, 420.0);
     }
 }

@@ -1,11 +1,15 @@
+//! Wobbly jelly window mesh renderer with static GPU index buffer and dirty-gated vertex upload.
+
+pub mod physics;
+
+pub use physics::{
+    Spring, SpringNode, GRID_COLS, GRID_ROWS, INDICES_PER_LAYER, PADDING,
+    TOTAL_NODES,
+};
+
 use bytemuck::{Pod, Zeroable};
 use std::time::Instant;
 use wgpu::util::DeviceExt;
-
-const GRID_COLS: usize = 10;
-const GRID_ROWS: usize = 8;
-const TOTAL_NODES: usize = GRID_COLS * GRID_ROWS;
-pub const PADDING: f32 = 60.0;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -26,20 +30,6 @@ pub struct Uniforms {
     pub _pad0: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct SpringNode {
-    pos: [f32; 2],
-    vel: [f32; 2],
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Spring {
-    a: usize,
-    b: usize,
-    rest_length: f32,
-    stiffness: f32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowControlAction {
     None,
@@ -54,17 +44,14 @@ pub enum WindowControlAction {
 pub struct WobbleWindow {
     pub target_pos: [f32; 2],
     pub size: [f32; 2],
-    nodes: [SpringNode; TOTAL_NODES],
-    springs: Vec<Spring>,
+    pub(crate) nodes: [SpringNode; TOTAL_NODES],
+    pub(crate) springs: Vec<Spring>,
 
     pub is_dragging: bool,
-    grab_uv: [f32; 2],
-    prev_time: Instant,
-
-    // Velocity injected from OS desktop window drag
+    pub(crate) grab_uv: [f32; 2],
+    pub(crate) prev_time: Instant,
     pub external_vel: [f32; 2],
 
-    // Offscreen Content Texture (where text and terminal buffer are rendered)
     #[allow(dead_code)]
     content_texture: wgpu::Texture,
     pub content_view: wgpu::TextureView,
@@ -88,6 +75,10 @@ pub struct WobbleWindow {
     pub opacity: f32,
     pub is_maximized: bool,
     pub hover_button: f32,
+
+    pub mesh_dirty: bool,
+    pub(crate) was_wobbling: bool,
+    scratch_vertices: Vec<WobbleVertex>,
 }
 
 impl WobbleWindow {
@@ -121,7 +112,7 @@ impl WobbleWindow {
 
         let cell_w = size[0] / (GRID_COLS - 1) as f32;
         let cell_h = size[1] / (GRID_ROWS - 1) as f32;
-        let mut springs = Vec::new();
+        let mut springs = Vec::with_capacity(280);
 
         let k_struct = wobble_cfg.stiffness;
         for r in 0..GRID_ROWS {
@@ -169,7 +160,6 @@ impl WobbleWindow {
             }
         }
 
-        // --- Offscreen Content Texture & Sampler ---
         let content_w = (size[0] as u32).max(64);
         let content_h = (size[1] as u32).max(64);
         let content_size = [content_w, content_h];
@@ -237,10 +227,9 @@ impl WobbleWindow {
             ],
         });
 
-        // --- GPU Pipeline ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Wobble Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("wobble.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../render/shaders/wobble.wgsl").into()),
         });
 
         let uniforms = Uniforms {
@@ -336,16 +325,35 @@ impl WobbleWindow {
             cache: None,
         });
 
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("WVB"),
-            size: (1024 * std::mem::size_of::<WobbleVertex>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        // Pre-build static index buffer once (Layer 0: shadow 0..378, Layer 1: window body 378..756)
+        let mut static_indices = Vec::with_capacity((INDICES_PER_LAYER * 2) as usize);
+        for layer in 0..2u16 {
+            let base = layer * (TOTAL_NODES as u16);
+            for r in 0..(GRID_ROWS - 1) {
+                for c in 0..(GRID_COLS - 1) {
+                    let tl = base + (r * GRID_COLS + c) as u16;
+                    static_indices.extend_from_slice(&[
+                        tl,
+                        tl + GRID_COLS as u16,
+                        tl + 1,
+                        tl + 1,
+                        tl + GRID_COLS as u16,
+                        tl + GRID_COLS as u16 + 1,
+                    ]);
+                }
+            }
+        }
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Static Wobble Index Buffer"),
+            contents: bytemuck::cast_slice(&static_indices),
+            usage: wgpu::BufferUsages::INDEX,
         });
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("WIB"),
-            size: (2048 * std::mem::size_of::<u16>()) as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Wobble Vertex Buffer"),
+            size: (TOTAL_NODES * 2 * std::mem::size_of::<WobbleVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -378,6 +386,9 @@ impl WobbleWindow {
             opacity,
             is_maximized: false,
             hover_button: 0.0,
+            mesh_dirty: true,
+            was_wobbling: false,
+            scratch_vertices: Vec::with_capacity(TOTAL_NODES * 2),
         }
     }
 
@@ -420,10 +431,13 @@ impl WobbleWindow {
             let dr = (rb as f32 - ra as f32) * cell_h;
             spring.rest_length = (dc * dc + dr * dr).sqrt();
             let is_diagonal = ca != cb && ra != rb;
-            spring.stiffness = if is_diagonal { self.spring_shear } else { self.stiffness };
+            spring.stiffness = if is_diagonal {
+                self.spring_shear
+            } else {
+                self.stiffness
+            };
         }
 
-        // Resize offscreen texture (full window height)
         let content_w = (self.size[0] as u32).max(64);
         let content_h = (self.size[1] as u32).max(64);
         self.content_size = [content_w, content_h];
@@ -460,6 +474,8 @@ impl WobbleWindow {
                 },
             ],
         });
+
+        self.mesh_dirty = true;
     }
 
     pub fn screen_to_content_pos(&self, mx: f32, my: f32) -> Option<[f32; 2]> {
@@ -468,9 +484,7 @@ impl WobbleWindow {
         if mx < x0 || mx > x0 + self.size[0] || my < y0 || my > y0 + self.size[1] {
             return None;
         }
-        let px = mx - x0;
-        let py = my - y0;
-        Some([px, py])
+        Some([mx - x0, my - y0])
     }
 
     pub fn handle_mouse_click(&mut self, mx: f32, my: f32) -> WindowControlAction {
@@ -496,11 +510,9 @@ impl WobbleWindow {
                 }
 
                 let total_w = self.size[0];
-                // [? Help] at total_w - 38.0..total_w - 6.0
                 if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
                     return WindowControlAction::Help;
                 }
-                // [⚙ Settings] at total_w - 74.0..total_w - 42.0
                 if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 6.0 && ry <= 36.0 {
                     return WindowControlAction::Settings;
                 }
@@ -532,159 +544,18 @@ impl WobbleWindow {
             }
             let total_w = self.size[0];
             if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 6.0 && ry <= 36.0 {
-                return 4.0; // Settings hover
+                return 4.0;
             }
             if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
-                return 5.0; // Help hover
+                return 5.0;
             }
         }
         0.0
     }
 
-    pub fn handle_mouse_up(&mut self) {
-        self.is_dragging = false;
-        self.external_vel = [0.0, 0.0];
-    }
-
-    pub fn inject_desktop_drag_velocity(&mut self, vel_x: f32, vel_y: f32) {
-        let max_vel = 800.0;
-        self.external_vel = [
-            vel_x.clamp(-max_vel, max_vel),
-            vel_y.clamp(-max_vel, max_vel),
-        ];
-    }
-
-    pub fn update_physics(&mut self) {
-        if self.is_maximized {
-            for r in 0..GRID_ROWS {
-                for c in 0..GRID_COLS {
-                    let u = c as f32 / (GRID_COLS - 1) as f32;
-                    let v = r as f32 / (GRID_ROWS - 1) as f32;
-                    let idx = r * GRID_COLS + c;
-                    self.nodes[idx].pos = [
-                        self.target_pos[0] + u * self.size[0],
-                        self.target_pos[1] + v * self.size[1],
-                    ];
-                    self.nodes[idx].vel = [0.0, 0.0];
-                }
-            }
-            return;
-        }
-
-        let now = Instant::now();
-        let dt = (now - self.prev_time).as_secs_f32().min(0.033);
-        self.prev_time = now;
-
-        let sub_steps = 4;
-        let sub_dt = dt / sub_steps as f32;
-
-        let k_anchor = 180.0;
-        let damping = self.damping;
-        let max_deform = self.max_deform;
-        let lag_scale = if self.is_dragging { 0.10 } else { 0.0 };
-
-        let vel_x = self.external_vel[0];
-        let vel_y = self.external_vel[1];
-
-        for _ in 0..sub_steps {
-            // 1. Internal mesh springs
-            for spring in &self.springs {
-                let pa = self.nodes[spring.a].pos;
-                let pb = self.nodes[spring.b].pos;
-                let dx = pb[0] - pa[0];
-                let dy = pb[1] - pa[1];
-                let dist = (dx * dx + dy * dy).sqrt().max(0.001);
-                let stretch = dist - spring.rest_length;
-                let f = spring.stiffness * stretch;
-                let fx = (dx / dist) * f;
-                let fy = (dy / dist) * f;
-
-                self.nodes[spring.a].vel[0] += fx * sub_dt;
-                self.nodes[spring.a].vel[1] += fy * sub_dt;
-                self.nodes[spring.b].vel[0] -= fx * sub_dt;
-                self.nodes[spring.b].vel[1] -= fy * sub_dt;
-            }
-
-            // 2. Anchor + Inertia Lag from desktop drag
-            for r in 0..GRID_ROWS {
-                for c in 0..GRID_COLS {
-                    let u = c as f32 / (GRID_COLS - 1) as f32;
-                    let v = r as f32 / (GRID_ROWS - 1) as f32;
-                    let idx = r * GRID_COLS + c;
-
-                    let rest_x = self.target_pos[0] + u * self.size[0];
-                    let rest_y = self.target_pos[1] + v * self.size[1];
-
-                    let du = u - self.grab_uv[0];
-                    let dv = v - self.grab_uv[1];
-                    let dist = (du * du + dv * dv).sqrt();
-
-                    let inertia_factor = if self.is_dragging {
-                        dist * lag_scale
-                    } else {
-                        0.0
-                    };
-
-                    let lag_x = -vel_x * inertia_factor;
-                    let lag_y = -vel_y * inertia_factor;
-
-                    let mut disp_x = self.nodes[idx].pos[0] - (rest_x + lag_x);
-                    let mut disp_y = self.nodes[idx].pos[1] - (rest_y + lag_y);
-
-                    let disp_len = (disp_x * disp_x + disp_y * disp_y).sqrt();
-                    if disp_len > max_deform {
-                        let scale = max_deform / disp_len;
-                        disp_x *= scale;
-                        disp_y *= scale;
-                        self.nodes[idx].pos[0] = rest_x + lag_x + disp_x;
-                        self.nodes[idx].pos[1] = rest_y + lag_y + disp_y;
-                    }
-
-                    let anchor_fx = -k_anchor * disp_x;
-                    let anchor_fy = -k_anchor * disp_y;
-
-                    self.nodes[idx].vel[0] += anchor_fx * sub_dt;
-                    self.nodes[idx].vel[1] += anchor_fy * sub_dt;
-
-                    self.nodes[idx].vel[0] -= self.nodes[idx].vel[0] * damping * sub_dt;
-                    self.nodes[idx].vel[1] -= self.nodes[idx].vel[1] * damping * sub_dt;
-
-                    self.nodes[idx].pos[0] += self.nodes[idx].vel[0] * sub_dt;
-                    self.nodes[idx].pos[1] += self.nodes[idx].vel[1] * sub_dt;
-                }
-            }
-        }
-    }
-
-    pub fn is_wobbling(&self) -> bool {
-        if self.is_maximized {
-            return false;
-        }
-        if self.external_vel[0].abs() > 1.0 || self.external_vel[1].abs() > 1.0 {
-            return true;
-        }
-        for r in 0..GRID_ROWS {
-            for c in 0..GRID_COLS {
-                let idx = r * GRID_COLS + c;
-                let u = c as f32 / (GRID_COLS - 1) as f32;
-                let v = r as f32 / (GRID_ROWS - 1) as f32;
-                let rest_x = self.target_pos[0] + u * self.size[0];
-                let rest_y = self.target_pos[1] + v * self.size[1];
-                let node = &self.nodes[idx];
-                if node.vel[0].abs() > 0.1
-                    || node.vel[1].abs() > 0.1
-                    || (node.pos[0] - rest_x).abs() > 0.2
-                    || (node.pos[1] - rest_y).abs() > 0.2
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
+    /// Renders the wobble mesh using the static index buffer and dirty-gated vertex buffer upload.
     pub fn render(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         render_pass: &mut wgpu::RenderPass,
         screen_size: [f32; 2],
@@ -700,18 +571,17 @@ impl WobbleWindow {
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        let mut vertices = Vec::new();
-        let mut indices: Vec<u16> = Vec::new();
-
-        // 1. Drop shadow (only in floating windowed mode)
-        if !self.is_maximized {
+        if self.mesh_dirty {
+            self.scratch_vertices.clear();
             let shadow_off = 10.0;
+
+            // Layer 0: Drop shadow vertices (80 nodes)
             for r in 0..GRID_ROWS {
                 for c in 0..GRID_COLS {
                     let u = c as f32 / (GRID_COLS - 1) as f32;
                     let v = r as f32 / (GRID_ROWS - 1) as f32;
                     let idx = r * GRID_COLS + c;
-                    vertices.push(WobbleVertex {
+                    self.scratch_vertices.push(WobbleVertex {
                         position: [
                             self.nodes[idx].pos[0] + 3.0,
                             self.nodes[idx].pos[1] + shadow_off,
@@ -721,62 +591,45 @@ impl WobbleWindow {
                     });
                 }
             }
-            for r in 0..(GRID_ROWS - 1) {
-                for c in 0..(GRID_COLS - 1) {
-                    let tl = (r * GRID_COLS + c) as u16;
-                    indices.extend_from_slice(&[
-                        tl,
-                        tl + GRID_COLS as u16,
-                        tl + 1,
-                        tl + 1,
-                        tl + GRID_COLS as u16,
-                        tl + GRID_COLS as u16 + 1,
-                    ]);
+
+            // Layer 1: Main terminal window vertices (80 nodes)
+            for r in 0..GRID_ROWS {
+                for c in 0..GRID_COLS {
+                    let u = c as f32 / (GRID_COLS - 1) as f32;
+                    let v = r as f32 / (GRID_ROWS - 1) as f32;
+                    let idx = r * GRID_COLS + c;
+                    let color = if v < 0.08 {
+                        [0.15, 0.16, 0.24, 0.98]
+                    } else {
+                        [0.10, 0.10, 0.15, self.opacity]
+                    };
+                    self.scratch_vertices.push(WobbleVertex {
+                        position: self.nodes[idx].pos,
+                        uv: [u, v],
+                        color,
+                    });
                 }
             }
+
+            queue.write_buffer(
+                &self.vertex_buffer,
+                0,
+                bytemuck::cast_slice(&self.scratch_vertices),
+            );
+            self.mesh_dirty = false;
         }
 
-        // 2. Main terminal window
-        let base = vertices.len() as u16;
-        for r in 0..GRID_ROWS {
-            for c in 0..GRID_COLS {
-                let u = c as f32 / (GRID_COLS - 1) as f32;
-                let v = r as f32 / (GRID_ROWS - 1) as f32;
-                let idx = r * GRID_COLS + c;
-                let color = if v < 0.08 {
-                    [0.15, 0.16, 0.24, 0.98] // Titlebar
-                } else {
-                    [0.10, 0.10, 0.15, self.opacity] // Terminal body base color
-                };
-                vertices.push(WobbleVertex {
-                    position: self.nodes[idx].pos,
-                    uv: [u, v],
-                    color,
-                });
-            }
-        }
-        for r in 0..(GRID_ROWS - 1) {
-            for c in 0..(GRID_COLS - 1) {
-                let tl = base + (r * GRID_COLS + c) as u16;
-                indices.extend_from_slice(&[
-                    tl,
-                    tl + GRID_COLS as u16,
-                    tl + 1,
-                    tl + 1,
-                    tl + GRID_COLS as u16,
-                    tl + GRID_COLS as u16 + 1,
-                ]);
-            }
-        }
-
-        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-        queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&indices));
+        let index_range = if self.is_maximized {
+            INDICES_PER_LAYER..(INDICES_PER_LAYER * 2)
+        } else {
+            0..(INDICES_PER_LAYER * 2)
+        };
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_bind_group(1, &self.content_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
+        render_pass.draw_indexed(index_range, 0, 0..1);
     }
 }

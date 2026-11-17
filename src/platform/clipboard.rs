@@ -1,3 +1,5 @@
+//! Native Win32 clipboard integration (`CF_UNICODETEXT`) with zero external crate dependencies.
+
 use std::ffi::c_void;
 
 const CF_UNICODETEXT: u32 = 13;
@@ -20,6 +22,7 @@ unsafe extern "system" {
     fn GlobalUnlock(hMem: *mut c_void) -> i32;
 }
 
+/// Reads UTF-16 text from the Windows clipboard and converts it to a UTF-8 `String`.
 pub fn get_text() -> Option<String> {
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
@@ -51,6 +54,7 @@ pub fn get_text() -> Option<String> {
     }
 }
 
+/// Writes a UTF-8 string slice into the Windows clipboard as null-terminated `CF_UNICODETEXT`.
 pub fn set_text(text: &str) -> bool {
     let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     let bytes_len = utf16.len() * std::mem::size_of::<u16>();
@@ -70,10 +74,15 @@ pub fn set_text(text: &str) -> bool {
             return false;
         }
         EmptyClipboard();
-        let res = SetClipboardData(CF_UNICODETEXT, h_mem);
+        let res = SetClipboardData(CF_UNICODETEXT, hMem_from(h_mem));
         CloseClipboard();
         !res.is_null()
     }
+}
+
+#[inline]
+const fn hMem_from(ptr: *mut c_void) -> *mut c_void {
+    ptr
 }
 
 #[cfg(test)]
