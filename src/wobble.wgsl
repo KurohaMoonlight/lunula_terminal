@@ -12,8 +12,11 @@ struct VertexOutput {
 
 struct Uniforms {
     screen_size: vec2<f32>,
+    window_size: vec2<f32>,
     time: f32,
-    _padding: f32,
+    is_maximized: f32,
+    hover_button: f32, // 0.0=none, 1.0=close, 2.0=minimize, 3.0=maximize
+    _pad0: f32,
 };
 
 @group(0) @binding(0)
@@ -41,59 +44,89 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Drop shadow pass (passed with color.a <= 0.4)
     if (in.color.a <= 0.40) {
+        if (uniforms.is_maximized > 0.5) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
         let edge_dist = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
         let alpha = smoothstep(0.0, 0.05, edge_dist) * in.color.a;
         return vec4<f32>(0.0, 0.0, 0.0, alpha);
     }
 
-    var col = in.color;
-    let titlebar_v = 0.08;
+    // Sample the full-window offscreen content texture (titlebar, tabs, terminal body)
+    var col = textureSample(t_content, s_content, uv);
 
-    // If in terminal body: sample the rendered text & content texture!
-    if (uv.y >= titlebar_v) {
-        // Map v from titlebar_v..1.0 into 0.0..1.0
-        let text_uv = vec2<f32>(uv.x, (uv.y - titlebar_v) / (1.0 - titlebar_v));
-        let content_sample = textureSample(t_content, s_content, text_uv);
-        col = content_sample;
-    } else {
+    let titlebar_h = 42.0;
+    let px = uv.x * uniforms.window_size.x;
+    let py = uv.y * uniforms.window_size.y;
+
+    if (py < titlebar_h) {
         // Window controls (Red, Yellow, Green circles on top-left of titlebar)
-        let aspect = uniforms.screen_size.x / uniforms.screen_size.y;
-        let center_y = 0.040;
-        let radius = 0.014;
+        let radius = 6.0;
+        let center_y = 21.0;
 
         // Dot 1: Red (Close)
-        let d1 = length(vec2<f32>((uv.x - 0.035) * aspect, uv.y - center_y));
+        let d1 = length(vec2<f32>(px - 30.0, py - center_y));
         if (d1 < radius) {
             col = vec4<f32>(0.96, 0.44, 0.44, 1.0);
+            if (uniforms.hover_button > 0.5 && uniforms.hover_button < 1.5) {
+                // macOS-style 'X' inside Close button
+                let lx = abs(px - 30.0);
+                let ly = abs(py - center_y);
+                if (abs(lx - ly) < 0.9 && max(lx, ly) < 3.2) {
+                    col = vec4<f32>(0.35, 0.08, 0.08, 1.0);
+                }
+            }
+        } else if (d1 < radius + 2.5 && uniforms.hover_button > 0.5 && uniforms.hover_button < 1.5) {
+            // Subtle glow ring around Close button
+            let glow = smoothstep(radius + 2.5, radius, d1);
+            col = mix(col, vec4<f32>(0.96, 0.44, 0.44, 0.6), glow * 0.7);
         }
 
         // Dot 2: Yellow (Minimize)
-        let d2 = length(vec2<f32>((uv.x - 0.058) * aspect, uv.y - center_y));
+        let d2 = length(vec2<f32>(px - 52.0, py - center_y));
         if (d2 < radius) {
             col = vec4<f32>(0.98, 0.75, 0.44, 1.0);
+            if (uniforms.hover_button > 1.5 && uniforms.hover_button < 2.5) {
+                // '-' inside Minimize button
+                if (abs(py - center_y) < 0.9 && abs(px - 52.0) < 3.2) {
+                    col = vec4<f32>(0.45, 0.28, 0.05, 1.0);
+                }
+            }
+        } else if (d2 < radius + 2.5 && uniforms.hover_button > 1.5 && uniforms.hover_button < 2.5) {
+            // Subtle glow ring around Minimize button
+            let glow = smoothstep(radius + 2.5, radius, d2);
+            col = mix(col, vec4<f32>(0.98, 0.75, 0.44, 0.6), glow * 0.7);
         }
 
         // Dot 3: Green (Maximize)
-        let d3 = length(vec2<f32>((uv.x - 0.081) * aspect, uv.y - center_y));
+        let d3 = length(vec2<f32>(px - 74.0, py - center_y));
         if (d3 < radius) {
             col = vec4<f32>(0.65, 0.89, 0.63, 1.0);
+            if (uniforms.hover_button > 2.5 && uniforms.hover_button < 3.5) {
+                // '+' inside Maximize button
+                let dx = abs(px - 74.0);
+                let dy = abs(py - center_y);
+                if ((dx < 0.9 && dy < 3.2) || (dy < 0.9 && dx < 3.2)) {
+                    col = vec4<f32>(0.08, 0.35, 0.08, 1.0);
+                }
+            }
+        } else if (d3 < radius + 2.5 && uniforms.hover_button > 2.5 && uniforms.hover_button < 3.5) {
+            // Subtle glow ring around Maximize button
+            let glow = smoothstep(radius + 2.5, radius, d3);
+            col = mix(col, vec4<f32>(0.65, 0.89, 0.63, 0.6), glow * 0.7);
         }
     }
 
     // Titlebar bottom dividing line
-    let sep_dist = abs(uv.y - titlebar_v);
-    if (sep_dist < 0.002) {
+    let sep_dist = abs(py - titlebar_h);
+    if (sep_dist < 1.0) {
         col = mix(col, vec4<f32>(0.35, 0.38, 0.52, 0.85), 0.70);
     }
 
-    // Outer border highlight (cyan / sapphire neon outline)
-    let border_x = min(uv.x, 1.0 - uv.x);
-    let border_y = min(uv.y, 1.0 - uv.y);
-    let border_dist = min(border_x, border_y);
-
-    if (border_dist < 0.007) {
-        let border_color = vec4<f32>(0.54, 0.71, 0.98, 0.95);
-        col = mix(col, border_color, 0.85);
+    // Outer border outline around the entire box
+    let border_px = min(min(px, uniforms.window_size.x - px), min(py, uniforms.window_size.y - py));
+    if (border_px < 1.0) {
+        col = mix(col, vec4<f32>(0.35, 0.38, 0.52, 0.85), 0.70);
     }
 
     return col;

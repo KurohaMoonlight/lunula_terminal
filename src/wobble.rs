@@ -19,8 +19,11 @@ pub struct WobbleVertex {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Uniforms {
     pub screen_size: [f32; 2],
+    pub window_size: [f32; 2],
     pub time: f32,
-    pub _padding: f32,
+    pub is_maximized: f32,
+    pub hover_button: f32,
+    pub _pad0: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -43,6 +46,8 @@ pub enum WindowControlAction {
     Close,
     Minimize,
     Maximize,
+    Settings,
+    Help,
     Drag,
 }
 
@@ -56,8 +61,8 @@ pub struct WobbleWindow {
     grab_uv: [f32; 2],
     prev_time: Instant,
 
-    rest_offset: [f32; 2],
-    prev_rest_offset: [f32; 2],
+    // Velocity injected from OS desktop window drag
+    pub external_vel: [f32; 2],
 
     // Offscreen Content Texture (where text and terminal buffer are rendered)
     #[allow(dead_code)]
@@ -69,12 +74,20 @@ pub struct WobbleWindow {
     content_sampler: wgpu::Sampler,
     surface_format: wgpu::TextureFormat,
 
-    pipeline: wgpu::RenderPipeline,
+    pub pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     start_time: Instant,
+
+    pub stiffness: f32,
+    pub damping: f32,
+    pub max_deform: f32,
+    pub spring_shear: f32,
+    pub opacity: f32,
+    pub is_maximized: bool,
+    pub hover_button: f32,
 }
 
 impl WobbleWindow {
@@ -82,12 +95,15 @@ impl WobbleWindow {
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
         screen_size: [f32; 2],
+        wobble_cfg: &crate::config::WobbleConfig,
+        opacity: f32,
     ) -> Self {
+        let padding = PADDING;
         let size = [
-            (screen_size[0] - 2.0 * PADDING).max(200.0),
-            (screen_size[1] - 2.0 * PADDING).max(150.0),
+            (screen_size[0] - 2.0 * padding).max(200.0),
+            (screen_size[1] - 2.0 * padding).max(150.0),
         ];
-        let target_pos = [PADDING, PADDING];
+        let target_pos = [padding, padding];
 
         let mut nodes = [SpringNode {
             pos: [0.0, 0.0],
@@ -107,7 +123,7 @@ impl WobbleWindow {
         let cell_h = size[1] / (GRID_ROWS - 1) as f32;
         let mut springs = Vec::new();
 
-        let k_struct = 420.0;
+        let k_struct = wobble_cfg.stiffness;
         for r in 0..GRID_ROWS {
             for c in 0..GRID_COLS {
                 let idx = r * GRID_COLS + c;
@@ -130,7 +146,7 @@ impl WobbleWindow {
             }
         }
 
-        let k_shear = 300.0;
+        let k_shear = wobble_cfg.spring_shear;
         let diag_len = (cell_w * cell_w + cell_h * cell_h).sqrt();
         for r in 0..(GRID_ROWS - 1) {
             for c in 0..(GRID_COLS - 1) {
@@ -155,7 +171,7 @@ impl WobbleWindow {
 
         // --- Offscreen Content Texture & Sampler ---
         let content_w = (size[0] as u32).max(64);
-        let content_h = ((size[1] * 0.92) as u32).max(64);
+        let content_h = (size[1] as u32).max(64);
         let content_size = [content_w, content_h];
 
         let content_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -229,8 +245,11 @@ impl WobbleWindow {
 
         let uniforms = Uniforms {
             screen_size,
+            window_size: size,
             time: 0.0,
-            _padding: 0.0,
+            is_maximized: 0.0,
+            hover_button: 0.0,
+            _pad0: 0.0,
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Wobble UB"),
@@ -338,8 +357,7 @@ impl WobbleWindow {
             is_dragging: false,
             grab_uv: [0.5, 0.05],
             prev_time: Instant::now(),
-            rest_offset: [0.0, 0.0],
-            prev_rest_offset: [0.0, 0.0],
+            external_vel: [0.0, 0.0],
             content_texture,
             content_view,
             content_size,
@@ -353,15 +371,30 @@ impl WobbleWindow {
             uniform_buffer,
             uniform_bind_group: ubg,
             start_time: Instant::now(),
+            stiffness: wobble_cfg.stiffness,
+            damping: wobble_cfg.damping,
+            max_deform: wobble_cfg.max_deform,
+            spring_shear: wobble_cfg.spring_shear,
+            opacity,
+            is_maximized: false,
+            hover_button: 0.0,
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, screen_w: f32, screen_h: f32) {
+    pub fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        screen_w: f32,
+        screen_h: f32,
+        is_maximized: bool,
+    ) {
+        self.is_maximized = is_maximized;
+        let padding = if is_maximized { 0.0 } else { PADDING };
         self.size = [
-            (screen_w - 2.0 * PADDING).max(200.0),
-            (screen_h - 2.0 * PADDING).max(150.0),
+            (screen_w - 2.0 * padding).max(200.0),
+            (screen_h - 2.0 * padding).max(150.0),
         ];
-        self.target_pos = [PADDING, PADDING];
+        self.target_pos = [padding, padding];
 
         for r in 0..GRID_ROWS {
             for c in 0..GRID_COLS {
@@ -386,11 +419,13 @@ impl WobbleWindow {
             let dc = (cb as f32 - ca as f32) * cell_w;
             let dr = (rb as f32 - ra as f32) * cell_h;
             spring.rest_length = (dc * dc + dr * dr).sqrt();
+            let is_diagonal = ca != cb && ra != rb;
+            spring.stiffness = if is_diagonal { self.spring_shear } else { self.stiffness };
         }
 
-        // Resize offscreen texture
+        // Resize offscreen texture (full window height)
         let content_w = (self.size[0] as u32).max(64);
-        let content_h = ((self.size[1] * 0.92) as u32).max(64);
+        let content_h = (self.size[1] as u32).max(64);
         self.content_size = [content_w, content_h];
 
         self.content_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -427,6 +462,17 @@ impl WobbleWindow {
         });
     }
 
+    pub fn screen_to_content_pos(&self, mx: f32, my: f32) -> Option<[f32; 2]> {
+        let x0 = self.target_pos[0];
+        let y0 = self.target_pos[1];
+        if mx < x0 || mx > x0 + self.size[0] || my < y0 || my > y0 + self.size[1] {
+            return None;
+        }
+        let px = mx - x0;
+        let py = my - y0;
+        Some([px, py])
+    }
+
     pub fn handle_mouse_click(&mut self, mx: f32, my: f32) -> WindowControlAction {
         let x0 = self.target_pos[0];
         let y0 = self.target_pos[1];
@@ -448,59 +494,100 @@ impl WobbleWindow {
                 if (rx - 74.0).hypot(ry - 21.0) < 12.0 {
                     return WindowControlAction::Maximize;
                 }
+
+                let total_w = self.size[0];
+                // [? Help] at total_w - 38.0..total_w - 6.0
+                if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
+                    return WindowControlAction::Help;
+                }
+                // [⚙ Settings] at total_w - 74.0..total_w - 42.0
+                if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 6.0 && ry <= 36.0 {
+                    return WindowControlAction::Settings;
+                }
+
+                if !self.is_maximized {
+                    self.is_dragging = true;
+                    return WindowControlAction::Drag;
+                }
             }
-            self.is_dragging = true;
-            return WindowControlAction::Drag;
         }
         WindowControlAction::None
     }
 
-    pub fn handle_mouse_up(&mut self) {
-        self.is_dragging = false;
+    pub fn get_hover_button(&self, mx: f32, my: f32) -> f32 {
+        let x0 = self.target_pos[0];
+        let y0 = self.target_pos[1];
+        let titlebar_h = 42.0;
+        if mx >= x0 && mx <= x0 + self.size[0] && my >= y0 && my <= y0 + titlebar_h {
+            let rx = mx - x0;
+            let ry = my - y0;
+            if (rx - 30.0).hypot(ry - 21.0) < 12.0 {
+                return 1.0;
+            }
+            if (rx - 52.0).hypot(ry - 21.0) < 12.0 {
+                return 2.0;
+            }
+            if (rx - 74.0).hypot(ry - 21.0) < 12.0 {
+                return 3.0;
+            }
+            let total_w = self.size[0];
+            if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 6.0 && ry <= 36.0 {
+                return 4.0; // Settings hover
+            }
+            if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
+                return 5.0; // Help hover
+            }
+        }
+        0.0
     }
 
-    pub fn notify_window_moved(&mut self, dx: f32, dy: f32) {
-        self.rest_offset[0] += dx;
-        self.rest_offset[1] += dy;
+    pub fn handle_mouse_up(&mut self) {
+        self.is_dragging = false;
+        self.external_vel = [0.0, 0.0];
+    }
+
+    pub fn inject_desktop_drag_velocity(&mut self, vel_x: f32, vel_y: f32) {
+        let max_vel = 800.0;
+        self.external_vel = [
+            vel_x.clamp(-max_vel, max_vel),
+            vel_y.clamp(-max_vel, max_vel),
+        ];
     }
 
     pub fn update_physics(&mut self) {
-        let now = Instant::now();
-        let dt = (now - self.prev_time).as_secs_f32().min(0.033);
-        self.prev_time = now;
-
-        let shift_x = self.rest_offset[0] - self.prev_rest_offset[0];
-        let shift_y = self.rest_offset[1] - self.prev_rest_offset[1];
-        self.prev_rest_offset = self.rest_offset;
-
-        if self.is_dragging && (shift_x.abs() > 0.01 || shift_y.abs() > 0.01) {
+        if self.is_maximized {
             for r in 0..GRID_ROWS {
                 for c in 0..GRID_COLS {
                     let u = c as f32 / (GRID_COLS - 1) as f32;
                     let v = r as f32 / (GRID_ROWS - 1) as f32;
                     let idx = r * GRID_COLS + c;
-
-                    let du = u - self.grab_uv[0];
-                    let dv = v - self.grab_uv[1];
-                    let dist = (du * du + dv * dv).sqrt();
-
-                    let follow = (1.0 - (dist * 1.8).min(1.0)).max(0.0);
-                    let follow = follow * follow;
-
-                    self.nodes[idx].pos[0] += shift_x * follow;
-                    self.nodes[idx].pos[1] += shift_y * follow;
+                    self.nodes[idx].pos = [
+                        self.target_pos[0] + u * self.size[0],
+                        self.target_pos[1] + v * self.size[1],
+                    ];
+                    self.nodes[idx].vel = [0.0, 0.0];
                 }
             }
+            return;
         }
 
-        let sub_steps = 6;
+        let now = Instant::now();
+        let dt = (now - self.prev_time).as_secs_f32().min(0.033);
+        self.prev_time = now;
+
+        let sub_steps = 4;
         let sub_dt = dt / sub_steps as f32;
 
-        let k_anchor = if self.is_dragging { 35.0 } else { 120.0 };
-        let damping = if self.is_dragging { 4.0 } else { 7.0 };
-        let max_deform = 55.0;
+        let k_anchor = 180.0;
+        let damping = self.damping;
+        let max_deform = self.max_deform;
+        let lag_scale = if self.is_dragging { 0.10 } else { 0.0 };
+
+        let vel_x = self.external_vel[0];
+        let vel_y = self.external_vel[1];
 
         for _ in 0..sub_steps {
+            // 1. Internal mesh springs
             for spring in &self.springs {
                 let pa = self.nodes[spring.a].pos;
                 let pb = self.nodes[spring.b].pos;
@@ -518,6 +605,7 @@ impl WobbleWindow {
                 self.nodes[spring.b].vel[1] -= fy * sub_dt;
             }
 
+            // 2. Anchor + Inertia Lag from desktop drag
             for r in 0..GRID_ROWS {
                 for c in 0..GRID_COLS {
                     let u = c as f32 / (GRID_COLS - 1) as f32;
@@ -527,30 +615,72 @@ impl WobbleWindow {
                     let rest_x = self.target_pos[0] + u * self.size[0];
                     let rest_y = self.target_pos[1] + v * self.size[1];
 
-                    let disp_x = self.nodes[idx].pos[0] - rest_x;
-                    let disp_y = self.nodes[idx].pos[1] - rest_y;
+                    let du = u - self.grab_uv[0];
+                    let dv = v - self.grab_uv[1];
+                    let dist = (du * du + dv * dv).sqrt();
+
+                    let inertia_factor = if self.is_dragging {
+                        dist * lag_scale
+                    } else {
+                        0.0
+                    };
+
+                    let lag_x = -vel_x * inertia_factor;
+                    let lag_y = -vel_y * inertia_factor;
+
+                    let mut disp_x = self.nodes[idx].pos[0] - (rest_x + lag_x);
+                    let mut disp_y = self.nodes[idx].pos[1] - (rest_y + lag_y);
 
                     let disp_len = (disp_x * disp_x + disp_y * disp_y).sqrt();
                     if disp_len > max_deform {
-                        let s = max_deform / disp_len;
-                        self.nodes[idx].pos[0] = rest_x + disp_x * s;
-                        self.nodes[idx].pos[1] = rest_y + disp_y * s;
+                        let scale = max_deform / disp_len;
+                        disp_x *= scale;
+                        disp_y *= scale;
+                        self.nodes[idx].pos[0] = rest_x + lag_x + disp_x;
+                        self.nodes[idx].pos[1] = rest_y + lag_y + disp_y;
                     }
 
-                    let disp_x = self.nodes[idx].pos[0] - rest_x;
-                    let disp_y = self.nodes[idx].pos[1] - rest_y;
+                    let anchor_fx = -k_anchor * disp_x;
+                    let anchor_fy = -k_anchor * disp_y;
 
-                    self.nodes[idx].vel[0] += -k_anchor * disp_x * sub_dt;
-                    self.nodes[idx].vel[1] += -k_anchor * disp_y * sub_dt;
+                    self.nodes[idx].vel[0] += anchor_fx * sub_dt;
+                    self.nodes[idx].vel[1] += anchor_fy * sub_dt;
 
-                    self.nodes[idx].vel[0] *= 1.0 - damping * sub_dt;
-                    self.nodes[idx].vel[1] *= 1.0 - damping * sub_dt;
+                    self.nodes[idx].vel[0] -= self.nodes[idx].vel[0] * damping * sub_dt;
+                    self.nodes[idx].vel[1] -= self.nodes[idx].vel[1] * damping * sub_dt;
 
                     self.nodes[idx].pos[0] += self.nodes[idx].vel[0] * sub_dt;
                     self.nodes[idx].pos[1] += self.nodes[idx].vel[1] * sub_dt;
                 }
             }
         }
+    }
+
+    pub fn is_wobbling(&self) -> bool {
+        if self.is_maximized {
+            return false;
+        }
+        if self.external_vel[0].abs() > 1.0 || self.external_vel[1].abs() > 1.0 {
+            return true;
+        }
+        for r in 0..GRID_ROWS {
+            for c in 0..GRID_COLS {
+                let idx = r * GRID_COLS + c;
+                let u = c as f32 / (GRID_COLS - 1) as f32;
+                let v = r as f32 / (GRID_ROWS - 1) as f32;
+                let rest_x = self.target_pos[0] + u * self.size[0];
+                let rest_y = self.target_pos[1] + v * self.size[1];
+                let node = &self.nodes[idx];
+                if node.vel[0].abs() > 0.1
+                    || node.vel[1].abs() > 0.1
+                    || (node.pos[0] - rest_x).abs() > 0.2
+                    || (node.pos[1] - rest_y).abs() > 0.2
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn render(
@@ -562,42 +692,47 @@ impl WobbleWindow {
         let elapsed = self.start_time.elapsed().as_secs_f32();
         let uniforms = Uniforms {
             screen_size,
+            window_size: self.size,
             time: elapsed,
-            _padding: 0.0,
+            is_maximized: if self.is_maximized { 1.0 } else { 0.0 },
+            hover_button: self.hover_button,
+            _pad0: 0.0,
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         let mut vertices = Vec::new();
         let mut indices: Vec<u16> = Vec::new();
 
-        // 1. Drop shadow
-        let shadow_off = 10.0;
-        for r in 0..GRID_ROWS {
-            for c in 0..GRID_COLS {
-                let u = c as f32 / (GRID_COLS - 1) as f32;
-                let v = r as f32 / (GRID_ROWS - 1) as f32;
-                let idx = r * GRID_COLS + c;
-                vertices.push(WobbleVertex {
-                    position: [
-                        self.nodes[idx].pos[0] + 3.0,
-                        self.nodes[idx].pos[1] + shadow_off,
-                    ],
-                    uv: [u, v],
-                    color: [0.0, 0.0, 0.0, 0.30],
-                });
+        // 1. Drop shadow (only in floating windowed mode)
+        if !self.is_maximized {
+            let shadow_off = 10.0;
+            for r in 0..GRID_ROWS {
+                for c in 0..GRID_COLS {
+                    let u = c as f32 / (GRID_COLS - 1) as f32;
+                    let v = r as f32 / (GRID_ROWS - 1) as f32;
+                    let idx = r * GRID_COLS + c;
+                    vertices.push(WobbleVertex {
+                        position: [
+                            self.nodes[idx].pos[0] + 3.0,
+                            self.nodes[idx].pos[1] + shadow_off,
+                        ],
+                        uv: [u, v],
+                        color: [0.0, 0.0, 0.0, 0.30],
+                    });
+                }
             }
-        }
-        for r in 0..(GRID_ROWS - 1) {
-            for c in 0..(GRID_COLS - 1) {
-                let tl = (r * GRID_COLS + c) as u16;
-                indices.extend_from_slice(&[
-                    tl,
-                    tl + GRID_COLS as u16,
-                    tl + 1,
-                    tl + 1,
-                    tl + GRID_COLS as u16,
-                    tl + GRID_COLS as u16 + 1,
-                ]);
+            for r in 0..(GRID_ROWS - 1) {
+                for c in 0..(GRID_COLS - 1) {
+                    let tl = (r * GRID_COLS + c) as u16;
+                    indices.extend_from_slice(&[
+                        tl,
+                        tl + GRID_COLS as u16,
+                        tl + 1,
+                        tl + 1,
+                        tl + GRID_COLS as u16,
+                        tl + GRID_COLS as u16 + 1,
+                    ]);
+                }
             }
         }
 
@@ -611,7 +746,7 @@ impl WobbleWindow {
                 let color = if v < 0.08 {
                     [0.15, 0.16, 0.24, 0.98] // Titlebar
                 } else {
-                    [0.10, 0.10, 0.15, 0.95] // Terminal body base color
+                    [0.10, 0.10, 0.15, self.opacity] // Terminal body base color
                 };
                 vertices.push(WobbleVertex {
                     position: self.nodes[idx].pos,
