@@ -17,6 +17,11 @@ struct Uniforms {
     is_maximized: f32,
     hover_button: f32, // 0.0=none, 1.0=close, 2.0=minimize, 3.0=maximize
     srgb_target: f32,  // 1.0 when the swapchain is *Srgb (palette must be linearised)
+    // Reactive wave (driven by window drag): x = energy 0..1.5, y = horizontal slosh px,
+    // z = vertical bob px, w = extra wave clock (s)
+    wave: vec4<f32>,
+    // x = surface tilt -1..1 (water piles up opposite to the motion)
+    wave2: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -117,6 +122,14 @@ fn kanagawa_ink_wave(px: f32, py: f32, t: f32, total_w: f32, th: f32) -> vec4<f3
 
     let p = vec2<f32>(px, py);
 
+    // ── Reactive sea state (all zero at rest → identical to the calm wave) ──
+    let en    = uniforms.wave.x;
+    let en1   = min(en, 1.0);
+    let slosh = uniforms.wave.y;
+    let bob   = uniforms.wave.z;
+    let wt    = t + uniforms.wave.w;   // wave clock: runs faster / reverses while dragging
+    let tilt  = uniforms.wave2.x;
+
     // ── Paper & wash ────────────────────────────────────────────────────────
     // dark sumi stone gradient, mottled by slow ink-wash clouds
     let wash = fbm(p * vec2<f32>(0.010, 0.040) + vec2<f32>(t * 0.015, 0.0));
@@ -138,8 +151,8 @@ fn kanagawa_ink_wave(px: f32, py: f32, t: f32, total_w: f32, th: f32) -> vec4<f3
     col = mix(col, mix(old_white, fuji_white, 0.35), moon * 0.62);
 
     // ── Far swell: misty indigo wash behind the great wave ──────────────────
-    let far = swell(px, t, 760.0, 9.0, 0.010, 0.62);
-    let far_y = th * 0.60 - far.x - (fbm(vec2<f32>(px * 0.03, 2.0)) - 0.4) * 3.0;
+    let far = swell(px - slosh * 0.4, wt, 760.0, 9.0 * (1.0 + 0.5 * en1), 0.010, 0.62);
+    let far_y = th * 0.60 - far.x - (fbm(vec2<f32>(px * 0.03, 2.0)) - 0.4) * 3.0 + bob * 0.3;
     let far_dc = py - far_y;
     if (far_dc < 0.0) {
         col = mix(col, wave1, exp(far_dc / 4.0) * 0.30);
@@ -150,10 +163,16 @@ fn kanagawa_ink_wave(px: f32, py: f32, t: f32, total_w: f32, th: f32) -> vec4<f3
     }
 
     // ── The Great Wave ──────────────────────────────────────────────────────
-    let sw = swell(px, t, 520.0, 21.0, 0.020, 0.30);
-    let rough = (fbm(vec2<f32>(px * 0.05, t * 0.10 + 3.7)) - 0.44) * 3.2;
-    let crest_y = th * 0.66 - sw.x - sin(px * 0.07 - t * 0.9) * 1.1 - rough;
-    let front = sw.y;
+    // Dragging swells the wave, shoves it sideways (slosh), tilts the surface and
+    // steepens the curling front — like water in a tray that is being pushed.
+    let sw = swell(px - slosh, wt, 520.0, 21.0 * (1.0 + 0.40 * en1), 0.020, 0.30);
+    let rough = (fbm(vec2<f32>(px * 0.05, wt * 0.10 + 3.7)) - 0.44) * 3.2 * (1.0 + 0.8 * en);
+    let tilt_y = tilt * (px / total_w - 0.5) * 14.0;
+    let crest_y = max(
+        th * 0.66 - sw.x - sin(px * 0.07 - wt * 0.9) * (1.1 + 1.2 * en) - rough - tilt_y + bob,
+        1.5
+    );
+    let front = clamp(sw.y * (1.0 + 0.6 * en), 0.0, 1.0);
     let dc = py - crest_y;
 
     if (dc < 0.0) {
@@ -162,12 +181,12 @@ fn kanagawa_ink_wave(px: f32, py: f32, t: f32, total_w: f32, th: f32) -> vec4<f3
 
         // spray: sparse fujiWhite droplets flung from the breaking front,
         // travelling with the swell (period * speed = 10.4 px/s)
-        let sp = vec2<f32>(px - t * 10.4, py) / 2.6;
+        let sp = vec2<f32>(px - wt * 10.4, py) / 2.6;
         let r = hash21(floor(sp));
         let cell = fract(sp) - vec2<f32>(0.5, 0.5);
         let dist = length(cell) * 2.6;
-        let drop_on = step(0.90, r) * (1.0 - smoothstep(0.35, 1.0, dist));
-        let spray_mask = front * smoothstep(-14.0, -1.5, dc);
+        let drop_on = step(0.90 - 0.14 * en1, r) * (1.0 - smoothstep(0.35, 1.0, dist));
+        let spray_mask = front * smoothstep(-14.0 - 12.0 * en1, -1.5, dc);
         col = mix(col, fuji_white, drop_on * spray_mask * 0.85);
     } else {
         let depth = clamp(dc / 22.0, 0.0, 1.0);
@@ -179,7 +198,7 @@ fn kanagawa_ink_wave(px: f32, py: f32, t: f32, total_w: f32, th: f32) -> vec4<f3
 
         // woodblock water-grain streaks following the crest line
         let flow = fbm(vec2<f32>(px * 0.03, dc * 0.20)) * 6.0;
-        let streak = smoothstep(0.88, 1.0, sin(dc * 0.85 + flow - t * 0.4));
+        let streak = smoothstep(0.88, 1.0, sin(dc * 0.85 + flow - wt * 0.4));
         body = mix(body, aqua2, streak * 0.20 * (1.0 - depth * 0.6));
 
         // ink pooling / mottling inside the body
@@ -194,17 +213,17 @@ fn kanagawa_ink_wave(px: f32, py: f32, t: f32, total_w: f32, th: f32) -> vec4<f3
 
         // dry-brush foam under the contour (washi white, broken by noise)
         let fd = dc - lw * 0.8;
-        let foam_band = (1.0 - smoothstep(0.0, 2.5 + 5.0 * front, fd)) * step(0.0, fd);
-        let bn = fbm(vec2<f32>(px * 0.22, py * 0.60 + t * 0.15));
+        let foam_band = (1.0 - smoothstep(0.0, 2.5 + 5.0 * front + 2.5 * en1, fd)) * step(0.0, fd);
+        let bn = fbm(vec2<f32>(px * 0.22, py * 0.60 + wt * 0.15));
         let foam_a = foam_band * smoothstep(0.38, 0.62, bn + front * 0.25);
         col = mix(col, mix(old_white, fuji_white, bn), foam_a * 0.90);
     }
 
     // ── Foreground ripple hairline, broken like a dry brush stroke ──────────
-    let r_y = th * 0.90 + sin(px * 0.025 + t * 0.6) * 1.4;
+    let r_y = th * 0.90 + sin(px * 0.025 + wt * 0.6) * (1.4 + 1.6 * en1);
     let r_line = (1.0 - smoothstep(0.2, 0.9, abs(py - r_y)));
     let r_break = smoothstep(0.35, 0.60, vnoise(vec2<f32>(px * 0.06, t * 0.05)));
-    col = mix(col, aqua1, r_line * r_break * 0.22);
+    col = mix(col, aqua1, r_line * r_break * 0.22 * (1.0 + en1));
 
     // ── Ink pooling at the bottom edge so it melts into the tab bar ─────────
     col = mix(col, sumi0, smoothstep(th - 7.0, th, py) * 0.55);

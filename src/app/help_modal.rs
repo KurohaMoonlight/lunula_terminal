@@ -105,6 +105,20 @@ pub fn build_help_buffer(text_engine: &mut TextEngine, buffer: &mut glyphon::Buf
     spans.push(("  Ctrl + V            ".to_string(), key_style));
     spans.push(("Paste clipboard text\n\n".to_string(), desc_style));
 
+    spans.push(("  🔍 VI MODE, SEARCH & HINTS\n".to_string(), section_style));
+    spans.push(("  Ctrl + Shift + Space".to_string(), key_style));
+    spans.push(("Toggle Alacritty-style Vi Mode\n".to_string(), desc_style));
+    spans.push(("  h / j / k / l       ".to_string(), key_style));
+    spans.push(("Move Vi cursor (← ↓ ↑ → into scrollback)\n".to_string(), desc_style));
+    spans.push(("  v / V               ".to_string(), key_style));
+    spans.push(("Toggle Visual / Visual Line selection\n".to_string(), desc_style));
+    spans.push(("  y                   ".to_string(), key_style));
+    spans.push(("Yank / copy selection to clipboard\n".to_string(), desc_style));
+    spans.push(("  /                   ".to_string(), key_style));
+    spans.push(("Search scrollback (n / N next/prev match)\n".to_string(), desc_style));
+    spans.push(("  Ctrl + Shift + U / u".to_string(), key_style));
+    spans.push(("Scan & highlight Regex Hints (URLs/paths/hashes)\n\n".to_string(), desc_style));
+
     spans.push((
         "  ─────────────────────────────────────────────────────────────\n".to_string(),
         border_style,

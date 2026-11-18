@@ -484,6 +484,61 @@ impl TextEngine {
         buffer.shape_until_scroll(&mut self.font_system, false);
     }
 
+    pub fn update_buffer_line(
+        &mut self,
+        buffer: &mut Buffer,
+        line_idx: usize,
+        spans: &[(String, CellStyle)],
+        is_last_line: bool,
+    ) {
+        let family = Family::Name(&self.font_family);
+        let default_attrs = Attrs::new()
+            .family(family)
+            .color(Color::rgb(220, 215, 186));
+        let ending = if is_last_line {
+            glyphon::cosmic_text::LineEnding::None
+        } else {
+            glyphon::cosmic_text::LineEnding::Lf
+        };
+
+        let mut line_text = String::new();
+        let mut attrs_list = glyphon::cosmic_text::AttrsList::new(&default_attrs);
+
+        for (text, style) in spans {
+            let start = line_text.len();
+            line_text.push_str(text);
+            let end = line_text.len();
+
+            if start < end {
+                let mut attrs = Attrs::new().family(family);
+                let mut color = style.fg.unwrap_or(ColorRgb {
+                    r: 220,
+                    g: 215,
+                    b: 186,
+                });
+                if style.dim() {
+                    color = ColorRgb {
+                        r: (color.r as f32 * 0.62) as u8,
+                        g: (color.g as f32 * 0.62) as u8,
+                        b: (color.b as f32 * 0.62) as u8,
+                    };
+                }
+                attrs = attrs.color(Color::rgb(color.r, color.g, color.b));
+                if style.bold() {
+                    attrs = attrs.weight(Weight::BOLD);
+                }
+                if style.italic() {
+                    attrs = attrs.style(Style::Italic);
+                }
+                attrs_list.add_span(start..end, &attrs);
+            }
+        }
+
+        if line_idx < buffer.lines.len() {
+            buffer.lines[line_idx].set_text(&line_text, ending, attrs_list);
+        }
+    }
+
     pub fn prepare_areas<'a, I>(&mut self, device: &Device, queue: &Queue, areas: I)
     where
         I: IntoIterator<Item = TextArea<'a>>,
@@ -498,6 +553,8 @@ impl TextEngine {
             &mut self.swash_cache,
         );
     }
+
+
 
     #[allow(dead_code)]
     pub fn prepare(&mut self, device: &Device, queue: &Queue, pos_x: f32, pos_y: f32) {

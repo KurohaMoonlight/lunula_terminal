@@ -263,6 +263,42 @@ impl GpuState {
                 }
                 return;
             }
+
+            // Ctrl + Shift + Space: Toggle Alacritty-style Vi Mode
+            if phys_code == Some(KeyCode::Space)
+                || matches!(&key_event.logical_key, Key::Named(NamedKey::Space))
+            {
+                if let Some(pane) = self.tab_manager.active_pane_mut() {
+                    if pane.vi_mode.is_some() {
+                        pane.vi_mode = None;
+                        pane.terminal.clear_selection();
+                    } else {
+                        let sb_len = pane.terminal.scrollback.len();
+                        let cur_abs_row = sb_len + pane.terminal.cursor_y;
+                        pane.vi_mode = Some(pane::ViMode::new(pane.terminal.cursor_x, cur_abs_row));
+                    }
+                    self.window.request_redraw();
+                    return;
+                }
+            }
+
+            // Ctrl + Shift + U: Scan & Toggle Regex Hints
+            if phys_code == Some(KeyCode::KeyU)
+                || matches!(logical_char, Some('u' | 'U' | '\x15'))
+            {
+                if let Some(pane) = self.tab_manager.active_pane_mut() {
+                    if pane.vi_mode.is_none() {
+                        let sb_len = pane.terminal.scrollback.len();
+                        let cur_abs_row = sb_len + pane.terminal.cursor_y;
+                        pane.vi_mode = Some(pane::ViMode::new(pane.terminal.cursor_x, cur_abs_row));
+                    }
+                    if let Some(vi) = &mut pane.vi_mode {
+                        vi.scan_hints(&pane.terminal);
+                    }
+                    self.window.request_redraw();
+                    return;
+                }
+            }
         }
 
         // 4. Ctrl + W (without shift) when multiple split panes exist
@@ -343,7 +379,163 @@ impl GpuState {
             }
         }
 
-        // 6. Active pane terminal keystroke forwarding
+        // 6. Vi Mode handling (temporarily disables forwarding keystrokes to PTY)
+        if let Some(pane) = self.tab_manager.active_pane_mut() {
+            if let Some(vi) = &mut pane.vi_mode {
+                // A. Search Input Mode
+                if vi.in_search_input {
+                    match &key_event.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            vi.in_search_input = false;
+                            self.window.request_redraw();
+                            return;
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            vi.in_search_input = false;
+                            vi.execute_search(&mut pane.terminal);
+                            self.window.request_redraw();
+                            return;
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            vi.search_query.pop();
+                            self.window.request_redraw();
+                            return;
+                        }
+                        _ => {
+                            if let Some(c) = logical_char {
+                                if !c.is_control() {
+                                    vi.search_query.push(c);
+                                    self.window.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // B. Vi Mode Navigation & Commands (Normal, Visual, VisualLine)
+                match &key_event.logical_key {
+                    Key::Named(NamedKey::Escape) => {
+                        if vi.hints_active {
+                            vi.hints_active = false;
+                        } else if vi.kind != pane::ViModeKind::Normal {
+                            vi.kind = pane::ViModeKind::Normal;
+                            vi.anchor = None;
+                            pane.terminal.clear_selection();
+                        } else {
+                            pane.vi_mode = None;
+                            pane.terminal.clear_selection();
+                        }
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowLeft) => {
+                        vi.move_left(&mut pane.terminal);
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowRight) => {
+                        vi.move_right(&mut pane.terminal);
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        vi.move_up(&mut pane.terminal);
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowDown) => {
+                        vi.move_down(&mut pane.terminal);
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::PageUp) => {
+                        for _ in 0..10 {
+                            vi.move_up(&mut pane.terminal);
+                        }
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::PageDown) => {
+                        for _ in 0..10 {
+                            vi.move_down(&mut pane.terminal);
+                        }
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::Home) => {
+                        vi.move_to_line_start(&mut pane.terminal);
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::End) => {
+                        vi.move_to_line_end(&mut pane.terminal);
+                        self.window.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        if let Some(url) =
+                            pane.terminal.get_hyperlink_at(vi.cursor_col, vi.cursor_abs_row)
+                        {
+                            let _ = std::process::Command::new("cmd")
+                                .args(["/c", "start", "", &url])
+                                .spawn();
+                        }
+                        self.window.request_redraw();
+                        return;
+                    }
+                    _ => {}
+                }
+
+                if self.ctrl_pressed && (phys_code == Some(KeyCode::KeyC) || logical_char == Some('c') || logical_char == Some('\x03')) {
+                    pane.vi_mode = None;
+                    pane.terminal.clear_selection();
+                    self.window.request_redraw();
+                    return;
+                }
+
+                match logical_char {
+                    Some('h') => vi.move_left(&mut pane.terminal),
+                    Some('l') => vi.move_right(&mut pane.terminal),
+                    Some('k') => vi.move_up(&mut pane.terminal),
+                    Some('j') => vi.move_down(&mut pane.terminal),
+                    Some('0') => vi.move_to_line_start(&mut pane.terminal),
+                    Some('$') => vi.move_to_line_end(&mut pane.terminal),
+                    Some('w') => vi.move_word_forward(&mut pane.terminal),
+                    Some('b') => vi.move_word_backward(&mut pane.terminal),
+                    Some('g') => vi.move_to_top(&mut pane.terminal),
+                    Some('G') => vi.move_to_bottom(&mut pane.terminal),
+                    Some('v') => vi.toggle_visual(&mut pane.terminal),
+                    Some('V') => vi.toggle_visual_line(&mut pane.terminal),
+                    Some('y') => {
+                        if let Some(text) = pane.terminal.get_selected_text() {
+                            clipboard::set_text(&text);
+                        }
+                        vi.kind = pane::ViModeKind::Normal;
+                        vi.anchor = None;
+                        pane.terminal.clear_selection();
+                    }
+                    Some('/') => {
+                        vi.in_search_input = true;
+                        vi.search_query.clear();
+                    }
+                    Some('n') => vi.next_match(&mut pane.terminal),
+                    Some('N') => vi.prev_match(&mut pane.terminal),
+                    Some('u' | 'o') => vi.scan_hints(&pane.terminal),
+                    Some('i' | 'q') => {
+                        pane.vi_mode = None;
+                        pane.terminal.clear_selection();
+                    }
+                    _ => {}
+                }
+
+                self.window.request_redraw();
+                return;
+            }
+        }
+
+        // 7. Active pane terminal keystroke forwarding
         if let Some(pane) = self.tab_manager.active_pane_mut() {
             match &key_event.logical_key {
                 Key::Named(NamedKey::PageUp) => {

@@ -42,6 +42,7 @@ pub struct GpuState {
     pub selecting: bool,
     pub help_visible: bool,
     pub help_buffer: glyphon::Buffer,
+    pub vi_status_buffer: glyphon::Buffer,
     pub help_scroll_y: f32,
     pub help_total_height: f32,
     pub help_dragging_scrollbar: bool,
@@ -74,12 +75,19 @@ pub struct GpuState {
     pub last_frame_time: Instant,
     pub high_fps_animating: bool,
     pub next_blink_frame: Option<Instant>,
+    pub initial_trim_frames: u8,
 }
 
 impl GpuState {
     pub async fn new(window: Arc<Window>, config: LunulaConfig, proxy: EventLoopProxy<()>) -> Self {
         let size = window.inner_size();
-        let instance = wgpu::Instance::default();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            flags: wgpu::InstanceFlags::empty(),
+            backend_options: Default::default(),
+            display: None,
+            memory_budget_thresholds: Default::default(),
+        });
         let surface = instance.create_surface(window.clone()).expect("surface");
 
         let adapter = instance
@@ -112,12 +120,12 @@ impl GpuState {
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
-        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-            wgpu::PresentMode::Mailbox
-        } else if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
-            wgpu::PresentMode::Immediate
-        } else {
+        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::AutoVsync) {
             wgpu::PresentMode::AutoVsync
+        } else if surface_caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
+            wgpu::PresentMode::Fifo
+        } else {
+            surface_caps.present_modes[0]
         };
 
         let (alpha_mode, _is_transparent) = if surface_caps
@@ -195,10 +203,14 @@ impl GpuState {
         let bar_clock_buffer = text_engine.create_buffer();
         let bar_gear_buffer = text_engine.create_buffer();
         let bar_help_buffer = text_engine.create_buffer();
+        let vi_status_buffer = text_engine.create_buffer();
         let cached_username = std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_else(|_| "user".to_string());
         let cached_git_branch = get_git_branch().unwrap_or_else(|| "detached".to_string());
+
+        // Trim working set after initialization to release temporary startup allocations
+        crate::platform::trim_working_set();
 
         Self {
             window,
@@ -227,6 +239,7 @@ impl GpuState {
             selecting: false,
             help_visible: false,
             help_buffer,
+            vi_status_buffer,
             help_scroll_y: 0.0,
             help_total_height,
             help_dragging_scrollbar: false,
@@ -256,6 +269,7 @@ impl GpuState {
             last_frame_time: Instant::now(),
             high_fps_animating: false,
             next_blink_frame: None,
+            initial_trim_frames: 0,
         }
     }
 

@@ -190,8 +190,9 @@ impl Perform for TerminalGrid {
                     };
                 }
             }
+            let row_idx = self.cursor_y;
             self.cursor_x += w;
-            self.dirty = true;
+            self.mark_row_dirty(row_idx);
         }
     }
 
@@ -202,17 +203,17 @@ impl Perform for TerminalGrid {
                     self.scroll_region_up();
                 } else if self.cursor_y + 1 < self.rows {
                     self.cursor_y += 1;
+                    self.mark_row_dirty(self.cursor_y);
                 }
-                self.dirty = true;
             }
             0x0D => {
                 self.cursor_x = 0;
-                self.dirty = true;
+                self.mark_row_dirty(self.cursor_y);
             }
             0x08 => {
                 if self.cursor_x > 0 {
                     self.cursor_x -= 1;
-                    self.dirty = true;
+                    self.mark_row_dirty(self.cursor_y);
                 }
             }
             0x09 => {
@@ -220,7 +221,7 @@ impl Perform for TerminalGrid {
                 if self.cursor_x >= self.cols {
                     self.cursor_x = self.cols.saturating_sub(1);
                 }
-                self.dirty = true;
+                self.mark_row_dirty(self.cursor_y);
             }
             _ => {}
         }
@@ -392,7 +393,7 @@ impl Perform for TerminalGrid {
                 'h' => match p0 {
                     25 => {
                         self.cursor_visible = true;
-                        self.dirty = true;
+                        self.mark_row_dirty(self.cursor_y);
                     }
                     1 => self.app_cursor_keys = true,
                     47 | 1047 | 1049 => {
@@ -410,10 +411,15 @@ impl Perform for TerminalGrid {
                             self.scroll_offset = 0;
                             self.target_scroll_y = 0.0;
                             self.current_scroll_y = 0.0;
-                            self.dirty = true;
+                            self.mark_all_rows_dirty();
                         }
                     }
                     2004 => self.bracketed_paste = true,
+                    // DEC Private Mode ?2026h: Begin Synchronized Update (BSU)
+                    2026 => {
+                        self.in_sync_update = true;
+                        self.sync_update_start = Some(std::time::Instant::now());
+                    }
                     1000 | 1002 | 1003 => self.mouse_reporting = true,
                     1006 => self.sgr_mouse = true,
                     _ => {}
@@ -421,7 +427,7 @@ impl Perform for TerminalGrid {
                 'l' => match p0 {
                     25 => {
                         self.cursor_visible = false;
-                        self.dirty = true;
+                        self.mark_row_dirty(self.cursor_y);
                     }
                     1 => self.app_cursor_keys = false,
                     47 | 1047 | 1049 => {
@@ -437,14 +443,28 @@ impl Perform for TerminalGrid {
                             self.scroll_offset = 0;
                             self.target_scroll_y = 0.0;
                             self.current_scroll_y = 0.0;
-                            self.dirty = true;
+                            self.mark_all_rows_dirty();
                         }
                     }
                     2004 => self.bracketed_paste = false,
+                    // DEC Private Mode ?2026l: End Synchronized Update (ESU)
+                    2026 => {
+                        self.in_sync_update = false;
+                        self.sync_update_start = None;
+                        self.mark_all_rows_dirty();
+                    }
                     1000 | 1002 | 1003 => self.mouse_reporting = false,
                     1006 => self.sgr_mouse = false,
                     _ => {}
                 },
+                'p' if intermediates.contains(&b'$') => {
+                    // DECRQM (DEC Request Mode) for Mode 2026
+                    if p0 == 2026 {
+                        let status = if self.in_sync_update { 1 } else { 2 };
+                        let resp = format!("\x1b[?2026;{}$y", status);
+                        self.responses.push(resp.into_bytes());
+                    }
+                }
                 _ => {}
             }
             return;
@@ -542,7 +562,7 @@ impl Perform for TerminalGrid {
                     }
                     _ => {}
                 }
-                self.dirty = true;
+                self.mark_all_rows_dirty();
             }
 
             'K' => {
@@ -565,7 +585,7 @@ impl Perform for TerminalGrid {
                         }
                         _ => {}
                     }
-                    self.dirty = true;
+                    self.mark_row_dirty(self.cursor_y);
                 }
             }
 
@@ -574,7 +594,7 @@ impl Perform for TerminalGrid {
                 if self.cursor_y < self.rows {
                     let end = (self.cursor_x + n).min(self.cols);
                     self.cells[self.cursor_y][self.cursor_x..end].fill(Cell::default());
-                    self.dirty = true;
+                    self.mark_row_dirty(self.cursor_y);
                 }
             }
 
@@ -585,7 +605,7 @@ impl Perform for TerminalGrid {
                     let row = &mut self.cells[self.cursor_y];
                     row.copy_within((self.cursor_x + count)..self.cols, self.cursor_x);
                     row[(self.cols - count)..self.cols].fill(Cell::default());
-                    self.dirty = true;
+                    self.mark_row_dirty(self.cursor_y);
                 }
             }
 
@@ -596,7 +616,7 @@ impl Perform for TerminalGrid {
                     let row = &mut self.cells[self.cursor_y];
                     row.copy_within(self.cursor_x..(self.cols - count), self.cursor_x + count);
                     row[self.cursor_x..(self.cursor_x + count)].fill(Cell::default());
-                    self.dirty = true;
+                    self.mark_row_dirty(self.cursor_y);
                 }
             }
 
@@ -618,7 +638,7 @@ impl Perform for TerminalGrid {
                     self.scroll_region_bottom = new_bottom;
                     self.cursor_x = 0;
                     self.cursor_y = 0;
-                    self.dirty = true;
+                    self.mark_all_rows_dirty();
                 }
             }
 
@@ -627,7 +647,7 @@ impl Perform for TerminalGrid {
                 for _ in 0..n {
                     self.scroll_region_up();
                 }
-                self.dirty = true;
+                self.mark_all_rows_dirty();
             }
 
             'T' => {
@@ -635,7 +655,7 @@ impl Perform for TerminalGrid {
                 for _ in 0..n {
                     self.scroll_region_down();
                 }
-                self.dirty = true;
+                self.mark_all_rows_dirty();
             }
 
             // Insert Lines (recycles bottom row of scroll region, 0 heap allocation)
@@ -648,7 +668,7 @@ impl Perform for TerminalGrid {
                         recycled.fill(Cell::default());
                         self.cells.insert(self.cursor_y, recycled);
                     }
-                    self.dirty = true;
+                    self.mark_all_rows_dirty();
                 }
             }
 
@@ -662,7 +682,7 @@ impl Perform for TerminalGrid {
                         recycled.fill(Cell::default());
                         self.cells.insert(self.scroll_region_bottom, recycled);
                     }
-                    self.dirty = true;
+                    self.mark_all_rows_dirty();
                 }
             }
 

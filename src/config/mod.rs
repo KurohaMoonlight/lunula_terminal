@@ -133,6 +133,9 @@ impl LunulaConfig {
                 if let Ok(spring_shear) = w_val.get::<f32>("spring_shear") {
                     config.wobble.spring_shear = spring_shear.max(10.0);
                 }
+                if let Ok(wave_reactivity) = w_val.get::<f32>("wave_reactivity") {
+                    config.wobble.wave_reactivity = wave_reactivity.clamp(0.0, 3.0);
+                }
             }
 
             if let Ok(t_val) = table.get::<Table>("terminal") {

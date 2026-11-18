@@ -7,6 +7,7 @@
 //! - Caches `last_shaped_base_offset: Option<usize>` so sub-pixel smooth scrolling shifts
 //!   `scroll_subpixel_y` on the GPU without re-running HarfBuzz shaping on every frame.
 
+use super::vi_mode::ViMode;
 use crate::config::LunulaConfig;
 use crate::pty::PtyManager;
 use crate::render::TextEngine;
@@ -24,6 +25,8 @@ pub struct Pane {
     pub terminal: TerminalGrid,
     pub buffer: Buffer,
     pub cached_bg_rects: Vec<BgRect>,
+    pub cached_row_bg_rects: Vec<Vec<BgRect>>,
+    pub vi_mode: Option<ViMode>,
     pub rect: [f32; 4],
     pub title: String,
     pub cursor_head: [f32; 2],
@@ -76,6 +79,8 @@ impl Pane {
             terminal,
             buffer,
             cached_bg_rects: Vec::new(),
+            cached_row_bg_rects: vec![Vec::new(); rows as usize],
+            vi_mode: None,
             rect: [0.0, 0.0, 100.0, 100.0],
             title: "pwsh".to_string(),
             cursor_head: [PANE_PAD, PANE_PAD],
@@ -99,6 +104,7 @@ impl Pane {
             if changed {
                 self.terminal.resize(new_cols as usize, new_rows as usize);
                 self.pty.resize(new_cols, new_rows);
+                self.cached_row_bg_rects = vec![Vec::new(); new_rows as usize];
                 self.last_shaped_base_offset = None;
             }
         }
@@ -236,7 +242,13 @@ impl Pane {
 
     /// Shapes `glyphon::Buffer` and builds `cached_bg_rects` only when content or row offset changed.
     pub fn sync_render_cache(&mut self, text_engine: &mut TextEngine) -> bool {
+        // DEC Private Mode ?2026: Synchronized Update (BSU/ESU)
+        if self.terminal.is_sync_update_active() {
+            return false;
+        }
+
         let cell_h = text_engine.cell_height.max(1.0);
+        let cell_w = text_engine.cell_width;
         self.terminal.cell_height = cell_h;
 
         let base_offset = if self.terminal.current_scroll_y > 0.0 {
@@ -251,17 +263,70 @@ impl Pane {
             0.0
         };
 
-        if self.terminal.dirty || self.last_shaped_base_offset != Some(base_offset) {
-            let (spans, bg_rects) = self.terminal.render_spans_and_backgrounds(
-                text_engine.cell_width,
-                text_engine.cell_height,
-                PANE_PAD,
-                PANE_PAD,
-            );
-            text_engine.shape_buffer(&mut self.buffer, &spans);
-            self.cached_bg_rects = bg_rects;
-            self.terminal.dirty = false;
+        if self.last_shaped_base_offset != Some(base_offset) {
+            self.terminal.mark_all_rows_dirty();
             self.last_shaped_base_offset = Some(base_offset);
+        }
+
+        if self.terminal.dirty {
+            let rows = self.terminal.rows;
+            if self.cached_row_bg_rects.len() != rows {
+                self.cached_row_bg_rects = vec![Vec::new(); rows];
+                self.terminal.mark_all_rows_dirty();
+            }
+
+            let family = glyphon::Family::Name(&text_engine.font_family);
+            let default_attrs = glyphon::Attrs::new()
+                .family(family)
+                .color(glyphon::Color::rgb(220, 215, 186));
+
+            while self.buffer.lines.len() < rows {
+                let idx = self.buffer.lines.len();
+                let is_last = idx == rows - 1;
+                let ending = if is_last {
+                    glyphon::cosmic_text::LineEnding::None
+                } else {
+                    glyphon::cosmic_text::LineEnding::Lf
+                };
+                self.buffer.lines.push(glyphon::cosmic_text::BufferLine::new(
+                    "",
+                    ending,
+                    glyphon::cosmic_text::AttrsList::new(&default_attrs),
+                    glyphon::Shaping::Advanced,
+                ));
+            }
+            if self.buffer.lines.len() > rows {
+                self.buffer.lines.truncate(rows);
+            }
+
+            // Update only rows marked dirty in TerminalGrid's row dirty bitmask
+            for r in 0..rows {
+                if self.terminal.is_row_dirty(r) {
+                    let (row_spans, row_bg) = self.terminal.render_row(
+                        r,
+                        base_offset,
+                        cell_w,
+                        cell_h,
+                        PANE_PAD,
+                        PANE_PAD,
+                    );
+                    let is_last = r == rows - 1;
+                    text_engine.update_buffer_line(&mut self.buffer, r, &row_spans, is_last);
+                    self.cached_row_bg_rects[r] = row_bg;
+                }
+            }
+
+            // HarfBuzz will only shape lines that were marked dirty and updated!
+            self.buffer.shape_until_scroll(&mut text_engine.font_system, false);
+
+            let total_bg = self.cached_row_bg_rects.iter().map(|v| v.len()).sum();
+            let mut bg_rects = Vec::with_capacity(total_bg);
+            for row_bg in &self.cached_row_bg_rects {
+                bg_rects.extend_from_slice(row_bg);
+            }
+            self.cached_bg_rects = bg_rects;
+
+            self.terminal.clear_dirty_rows();
             true
         } else {
             false

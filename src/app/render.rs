@@ -350,6 +350,7 @@ impl GpuState {
                 }
 
                 if is_active
+                    && pane.vi_mode.is_none()
                     && pane.terminal.cursor_visible
                     && pane.terminal.current_scroll_y <= 5.0
                 {
@@ -411,6 +412,149 @@ impl GpuState {
                                 alpha: cursor_alpha,
                             });
                         }
+                    }
+                }
+
+                // Vi Mode highlights & navigation overlays via pure GPU BgRects
+                if let Some(vi) = &pane.vi_mode {
+                    let sb_len = pane.terminal.scrollback.len();
+                    let total_rows = sb_len + pane.terminal.rows;
+                    let base_offset = (pane.terminal.current_scroll_y / cell_h.max(1.0)).floor() as usize;
+                    let effective_base = if pane.terminal.current_scroll_y > 0.0 {
+                        base_offset
+                    } else {
+                        pane.terminal.scroll_offset
+                    };
+                    let start_abs = total_rows.saturating_sub(effective_base + pane.terminal.rows);
+                    let end_abs = start_abs + pane.terminal.rows;
+
+                    // 1. Search Matches Highlights (Pure GPU BgRect)
+                    for (idx, m) in vi.search_matches.iter().enumerate() {
+                        if m.point.abs_row >= start_abs && m.point.abs_row < end_abs {
+                            let vis_r = m.point.abs_row - start_abs;
+                            let rx = px + pane::PANE_PAD + m.point.col as f32 * cell_w;
+                            let ry = py + pane::PANE_PAD + vis_r as f32 * cell_h - sub_y;
+                            let rw = m.len as f32 * cell_w;
+                            let is_active_m = vi.active_match_idx == Some(idx);
+
+                            if ry + cell_h > py && ry < py + ph {
+                                bg_rects.push(terminal::BgRect {
+                                    x: rx,
+                                    y: ry,
+                                    w: rw.min(px + pw - rx),
+                                    h: cell_h,
+                                    color: if is_active_m {
+                                        terminal::ColorRgb { r: 255, g: 158, b: 59 } // Kanagawa surimiOrange
+                                    } else {
+                                        terminal::ColorRgb { r: 230, g: 195, b: 132 } // Kanagawa boatYellow2
+                                    },
+                                    alpha: if is_active_m { 0.70 } else { 0.35 },
+                                });
+                            }
+                        }
+                    }
+
+                    // 2. Regex Hints Highlights (Pure GPU BgRect)
+                    if vi.hints_active {
+                        for m in &vi.hint_matches {
+                            if m.point.abs_row >= start_abs && m.point.abs_row < end_abs {
+                                let vis_r = m.point.abs_row - start_abs;
+                                let rx = px + pane::PANE_PAD + m.point.col as f32 * cell_w;
+                                let ry = py + pane::PANE_PAD + vis_r as f32 * cell_h - sub_y;
+                                let rw = m.len as f32 * cell_w;
+
+                                if ry + cell_h > py && ry < py + ph {
+                                    bg_rects.push(terminal::BgRect {
+                                        x: rx,
+                                        y: ry,
+                                        w: rw.min(px + pw - rx),
+                                        h: cell_h,
+                                        color: terminal::ColorRgb { r: 152, g: 187, b: 108 }, // Kanagawa springGreen
+                                        alpha: 0.32,
+                                    });
+                                    bg_rects.push(terminal::BgRect {
+                                        x: rx,
+                                        y: ry + cell_h - 2.0,
+                                        w: rw.min(px + pw - rx),
+                                        h: 2.0,
+                                        color: terminal::ColorRgb { r: 152, g: 187, b: 108 },
+                                        alpha: 0.90,
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Vi Navigation Cursor (Pure GPU BgRect)
+                    if vi.cursor_abs_row >= start_abs && vi.cursor_abs_row < end_abs {
+                        let vis_r = vi.cursor_abs_row - start_abs;
+                        let rx = px + pane::PANE_PAD + vi.cursor_col as f32 * cell_w;
+                        let ry = py + pane::PANE_PAD + vis_r as f32 * cell_h - sub_y;
+
+                        let vi_color = match vi.kind {
+                            pane::ViModeKind::Normal => terminal::ColorRgb { r: 255, g: 158, b: 59 },
+                            pane::ViModeKind::Visual => terminal::ColorRgb { r: 126, g: 156, b: 216 },
+                            pane::ViModeKind::VisualLine => terminal::ColorRgb { r: 230, g: 195, b: 132 },
+                        };
+
+                        if ry + cell_h > py && ry < py + ph {
+                            bg_rects.push(terminal::BgRect {
+                                x: rx,
+                                y: ry,
+                                w: cell_w,
+                                h: cell_h,
+                                color: vi_color,
+                                alpha: 0.75,
+                            });
+                        }
+                    }
+
+                    // 4. Vi Mode Badge / Search Input Bar (Pure GPU BgRect)
+                    let bar_h = 24.0;
+                    let bar_y = py + ph - bar_h - 6.0;
+                    if vi.in_search_input {
+                        bg_rects.push(terminal::BgRect {
+                            x: px + 12.0,
+                            y: bar_y,
+                            w: (pw - 24.0).max(80.0),
+                            h: bar_h,
+                            color: terminal::ColorRgb { r: 34, g: 50, b: 73 }, // Kanagawa waveBlue1
+                            alpha: 0.95,
+                        });
+                        bg_rects.push(terminal::BgRect {
+                            x: px + 12.0,
+                            y: bar_y,
+                            w: (pw - 24.0).max(80.0),
+                            h: 1.5,
+                            color: terminal::ColorRgb { r: 126, g: 156, b: 216 },
+                            alpha: 0.90,
+                        });
+                    } else {
+                        let badge_w = 190.0;
+                        bg_rects.push(terminal::BgRect {
+                            x: px + 12.0,
+                            y: bar_y,
+                            w: badge_w,
+                            h: bar_h,
+                            color: match vi.kind {
+                                pane::ViModeKind::Normal => terminal::ColorRgb { r: 42, g: 42, b: 55 },
+                                pane::ViModeKind::Visual => terminal::ColorRgb { r: 45, g: 79, b: 103 },
+                                pane::ViModeKind::VisualLine => terminal::ColorRgb { r: 65, g: 55, b: 40 },
+                            },
+                            alpha: 0.92,
+                        });
+                        bg_rects.push(terminal::BgRect {
+                            x: px + 12.0,
+                            y: bar_y,
+                            w: badge_w,
+                            h: 1.5,
+                            color: match vi.kind {
+                                pane::ViModeKind::Normal => terminal::ColorRgb { r: 255, g: 158, b: 59 },
+                                pane::ViModeKind::Visual => terminal::ColorRgb { r: 126, g: 156, b: 216 },
+                                pane::ViModeKind::VisualLine => terminal::ColorRgb { r: 230, g: 195, b: 132 },
+                            },
+                            alpha: 0.90,
+                        });
                     }
                 }
             }
@@ -691,6 +835,71 @@ impl GpuState {
             }
         }
 
+        // 4g. Vi Mode status overlay text
+        if let Some(pane) = self.tab_manager.active_pane() {
+            if let Some(vi) = &pane.vi_mode {
+                let px = pane.rect[0];
+                let py = pane.rect[1];
+                let pw = pane.rect[2];
+                let ph = pane.rect[3];
+                let bar_h = 24.0;
+                let bar_y = py + ph - bar_h - 6.0;
+
+                let (status_text, status_color) = if vi.in_search_input {
+                    (
+                        format!(" /{} [{}]", vi.search_query, vi.search_matches.len()),
+                        terminal::ColorRgb { r: 230, g: 195, b: 132 },
+                    )
+                } else {
+                    let mode_str = match vi.kind {
+                        pane::ViModeKind::Normal => "VI: NORMAL",
+                        pane::ViModeKind::Visual => "VI: VISUAL",
+                        pane::ViModeKind::VisualLine => "VI: VISUAL LINE",
+                    };
+                    let info = if vi.hints_active {
+                        format!(" ({} hints)", vi.hint_matches.len())
+                    } else if !vi.search_matches.is_empty() {
+                        format!(
+                            " ({}/{})",
+                            vi.active_match_idx.map_or(1, |i| i + 1),
+                            vi.search_matches.len()
+                        )
+                    } else {
+                        String::new()
+                    };
+                    (
+                        format!(" {}{} ", mode_str, info),
+                        match vi.kind {
+                            pane::ViModeKind::Normal => terminal::ColorRgb { r: 255, g: 158, b: 59 },
+                            pane::ViModeKind::Visual => terminal::ColorRgb { r: 126, g: 156, b: 216 },
+                            pane::ViModeKind::VisualLine => terminal::ColorRgb { r: 230, g: 195, b: 132 },
+                        },
+                    )
+                };
+
+                let spans = [(
+                    status_text,
+                    terminal::CellStyle::new().with_fg(status_color).with_bold(true),
+                )];
+                self.text_engine.shape_buffer(&mut self.vi_status_buffer, &spans);
+
+                areas.push(glyphon::TextArea {
+                    buffer: &self.vi_status_buffer,
+                    left: px + 16.0,
+                    top: bar_y + 2.0,
+                    scale: 1.0,
+                    bounds: glyphon::TextBounds {
+                        left: (px + 12.0) as i32,
+                        top: bar_y as i32,
+                        right: (px + pw - 12.0) as i32,
+                        bottom: (bar_y + bar_h) as i32,
+                    },
+                    default_color: glyphon::Color::rgb(status_color.r, status_color.g, status_color.b),
+                    custom_glyphs: &[],
+                });
+            }
+        }
+
         if self.help_visible {
             let padding_top = 16.0;
             let padding_bottom = 14.0;
@@ -807,6 +1016,13 @@ impl GpuState {
 
         self.queue.submit(std::iter::once(enc.finish()));
         self.queue.present(output);
+
+        if self.initial_trim_frames < 5 {
+            self.initial_trim_frames += 1;
+            if self.initial_trim_frames == 5 {
+                crate::platform::trim_working_set();
+            }
+        }
 
         self.high_fps_animating = high_fps_animating;
         if high_fps_animating {

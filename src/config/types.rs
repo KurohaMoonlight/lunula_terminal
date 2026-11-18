@@ -46,6 +46,8 @@ pub struct WobbleConfig {
     pub damping: f32,
     pub max_deform: f32,
     pub spring_shear: f32,
+    /// Seberapa kuat ombak Kanagawa di titlebar bereaksi saat window digeser (0 = mati).
+    pub wave_reactivity: f32,
 }
 
 impl Default for WobbleConfig {
@@ -55,6 +57,7 @@ impl Default for WobbleConfig {
             damping: 7.0,
             max_deform: 55.0,
             spring_shear: 300.0,
+            wave_reactivity: 1.0,
         }
     }
 }

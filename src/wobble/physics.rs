@@ -25,7 +25,95 @@ pub struct Spring {
     pub stiffness: f32,
 }
 
+/// Reactive "ocean" state for the Kanagawa wave in the title bar.
+///
+/// The wave is modelled like water in a tray: dragging the window pushes the
+/// water to the *back* (underdamped spring toward `-velocity`), and stopping it
+/// makes the water slosh forward and ring out, exactly like the jelly mesh does.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WaveState {
+    /// 0..1.5 agitation: drives swell height, front steepness, spray and speed.
+    pub energy: f32,
+    /// Horizontal slosh offset in px (position, velocity).
+    pub slosh: [f32; 2],
+    /// Vertical water-level bob in px (position, velocity).
+    pub bob: [f32; 2],
+    /// Extra wave clock (seconds) so the swell travels faster / reverses with drag.
+    pub extra_t: f32,
+    pub active: bool,
+}
+
+impl WaveState {
+    /// Integrates one frame. Returns true while the wave still needs frames.
+    pub fn step(&mut self, vx: f32, vy: f32, r: f32, dt: f32) -> bool {
+        let w = self;
+        let was_active = w.active;
+
+        // Underdamped springs toward a velocity-dependent target (ζ≈0.2: a few
+        // visible sloshes, settling in ~1.5 s). Semi-implicit Euler; dt <= 33 ms.
+        let slosh_target = (-vx * 0.025 * r).clamp(-42.0, 42.0);
+        let a = 70.0 * (slosh_target - w.slosh[0]) - 3.2 * w.slosh[1];
+        w.slosh[1] += a * dt;
+        w.slosh[0] += w.slosh[1] * dt;
+
+        let bob_target = (-vy * 0.010 * r).clamp(-7.0, 7.0);
+        let a = 90.0 * (bob_target - w.bob[0]) - 4.0 * w.bob[1];
+        w.bob[1] += a * dt;
+        w.bob[0] += w.bob[1] * dt;
+
+        // Agitation: fast attack while moving, slow decay so the sea calms gently.
+        let speed_n = (vx.hypot(vy) / 900.0).clamp(0.0, 1.0);
+        let osc_n = (w.slosh[0].abs() / 35.0 + w.slosh[1].abs() / 160.0).clamp(0.0, 1.0);
+        let target = (speed_n.max(osc_n) * r).min(1.5);
+        let rate = if target > w.energy { 9.0 } else { 1.3 };
+        w.energy += (target - w.energy) * (1.0 - (-rate * dt).exp());
+
+        // Swell travels faster when agitated, and against the drag direction.
+        w.extra_t += dt * (4.0 * w.energy - 6.0 * (vx / 1600.0) * r);
+
+        w.active = w.energy > 0.01
+            || w.slosh[0].abs() > 0.05
+            || w.slosh[1].abs() > 0.4
+            || w.bob[0].abs() > 0.03
+            || w.bob[1].abs() > 0.3;
+        if !w.active {
+            w.energy = 0.0;
+            w.slosh = [0.0; 2];
+            w.bob = [0.0; 2];
+        }
+        // Keep requesting frames for one extra tick after settling so the calm
+        // (zeroed) state is actually drawn.
+        w.active || was_active
+    }
+
+    pub fn uniform_wave(&self) -> [f32; 4] {
+        [self.energy, self.slosh[0], self.bob[0], self.extra_t]
+    }
+
+    /// (surface tilt -1..1, ...): water piles up on the side opposite to motion.
+    pub fn uniform_wave2(&self) -> [f32; 4] {
+        [(self.slosh[0] / 40.0).clamp(-1.0, 1.0), 0.0, 0.0, 0.0]
+    }
+}
+
 impl WobbleWindow {
+    /// Advances the reactive wave oscillators. Returns true while the wave still
+    /// needs frames (so the render loop keeps running at high FPS until it settles).
+    pub(crate) fn update_wave(&mut self, dt: f32) -> bool {
+        let r = self.wave_reactivity;
+        if self.is_maximized || r <= 0.0 {
+            let was_active = self.wave.active;
+            self.wave.energy = 0.0;
+            self.wave.slosh = [0.0; 2];
+            self.wave.bob = [0.0; 2];
+            self.wave.active = false;
+            return was_active; // one last frame to draw the calm state
+        }
+
+        let (vx, vy) = (self.external_vel[0], self.external_vel[1]);
+        self.wave.step(vx, vy, r, dt)
+    }
+
     pub fn handle_mouse_up(&mut self) {
         if self.is_dragging {
             self.is_dragging = false;
@@ -62,8 +150,10 @@ impl WobbleWindow {
         let dt = (now - self.prev_time).as_secs_f32().clamp(0.0005, 0.033);
         self.prev_time = now;
 
+        let wave_active = self.update_wave(dt);
+
         if self.is_maximized {
-            return false;
+            return wave_active;
         }
 
         if !self.is_dragging && !self.is_wobbling() {
@@ -84,7 +174,7 @@ impl WobbleWindow {
                 self.was_wobbling = false;
                 self.mesh_dirty = true;
             }
-            return false;
+            return wave_active;
         }
 
         self.was_wobbling = true;
@@ -210,5 +300,43 @@ impl WobbleWindow {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod wave_tests {
+    use super::*;
+
+    fn step(w: &mut WaveState, vx: f32, vy: f32, r: f32, dt: f32) {
+        w.step(vx, vy, r, dt);
+    }
+
+    #[test]
+    fn wave_pushes_back_overshoots_and_settles() {
+        let mut w = WaveState::default();
+        let dt = 1.0 / 60.0;
+        // Drag right at 1000 px/s for 0.6 s: water leans to the back (negative).
+        for _ in 0..36 {
+            step(&mut w, 1000.0, 0.0, 1.0, dt);
+        }
+        assert!(w.slosh[0] < -15.0, "slosh should lean back, got {}", w.slosh[0]);
+        assert!(w.energy > 0.7, "energy should be high, got {}", w.energy);
+        // Release: water must overshoot forward (positive) before settling.
+        let mut max_fwd = 0.0f32;
+        for _ in 0..300 {
+            step(&mut w, 0.0, 0.0, 1.0, dt);
+            max_fwd = max_fwd.max(w.slosh[0]);
+        }
+        assert!(max_fwd > 3.0, "expected forward overshoot, got {max_fwd}");
+        assert!(w.slosh[0].abs() < 0.5 && w.energy < 0.05, "should calm after 5 s: {w:?}");
+    }
+
+    #[test]
+    fn wave_is_inert_at_rest() {
+        let mut w = WaveState::default();
+        for _ in 0..120 {
+            step(&mut w, 0.0, 0.0, 1.0, 1.0 / 60.0);
+        }
+        assert_eq!((w.energy, w.slosh[0], w.bob[0]), (0.0, 0.0, 0.0));
     }
 }

@@ -46,6 +46,9 @@ pub struct TerminalGrid {
     pub sgr_mouse: bool,
     pub hyperlinks: Vec<String>,
     pub current_hyperlink_idx: u16,
+    pub in_sync_update: bool,
+    pub sync_update_start: Option<std::time::Instant>,
+    pub dirty_rows: Vec<u64>,
 }
 
 impl TerminalGrid {
@@ -54,6 +57,8 @@ impl TerminalGrid {
         let rows = rows.max(5);
         let cells = vec![vec![Cell::default(); cols]; rows];
         let scroll_region_bottom = rows.saturating_sub(1);
+        let num_words = (rows + 63) / 64;
+        let dirty_rows = vec![!0u64; num_words];
 
         Self {
             cols,
@@ -93,7 +98,65 @@ impl TerminalGrid {
             sgr_mouse: false,
             hyperlinks: Vec::new(),
             current_hyperlink_idx: 0,
+            in_sync_update: false,
+            sync_update_start: None,
+            dirty_rows,
         }
+    }
+
+    #[inline]
+    pub fn mark_row_dirty(&mut self, row: usize) {
+        if row < self.rows {
+            let word = row / 64;
+            let bit = 1u64 << (row % 64);
+            if word < self.dirty_rows.len() {
+                self.dirty_rows[word] |= bit;
+            }
+            self.dirty = true;
+        }
+    }
+
+    #[inline]
+    pub fn mark_all_rows_dirty(&mut self) {
+        for word in &mut self.dirty_rows {
+            *word = !0u64;
+        }
+        self.dirty = true;
+    }
+
+    #[inline]
+    pub fn is_row_dirty(&self, row: usize) -> bool {
+        if row < self.rows {
+            let word = row / 64;
+            let bit = 1u64 << (row % 64);
+            if let Some(&w) = self.dirty_rows.get(word) {
+                return (w & bit) != 0;
+            }
+        }
+        false
+    }
+
+    #[inline]
+    pub fn clear_dirty_rows(&mut self) {
+        for word in &mut self.dirty_rows {
+            *word = 0;
+        }
+        self.dirty = false;
+    }
+
+    /// Checks if DEC 2026 Synchronized Update is active and within the 16ms frame timeout.
+    pub fn is_sync_update_active(&mut self) -> bool {
+        if self.in_sync_update {
+            if let Some(start) = self.sync_update_start {
+                if start.elapsed() >= std::time::Duration::from_millis(16) {
+                    self.in_sync_update = false;
+                    self.sync_update_start = None;
+                    return false;
+                }
+            }
+            return true;
+        }
+        false
     }
 
     pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
@@ -128,7 +191,9 @@ impl TerminalGrid {
         self.scroll_offset = 0;
         self.target_scroll_y = 0.0;
         self.current_scroll_y = 0.0;
-        self.dirty = true;
+        let num_words = (new_rows + 63) / 64;
+        self.dirty_rows = vec![!0u64; num_words];
+        self.mark_all_rows_dirty();
     }
 
     pub fn advance_bytes(&mut self, bytes: &[u8]) {
@@ -690,5 +755,61 @@ mod tests {
         assert!(grid.app_cursor_keys);
         grid.advance_bytes(b"\x1b[?1l");
         assert!(!grid.app_cursor_keys);
+    }
+
+    #[test]
+    fn test_dec_mode_2026_synchronized_update() {
+        let mut grid = TerminalGrid::new(20, 5);
+        assert!(!grid.in_sync_update);
+        assert!(!grid.is_sync_update_active());
+
+        // Enable mode ?2026h
+        grid.advance_bytes(b"\x1b[?2026h");
+        assert!(grid.in_sync_update);
+        assert!(grid.is_sync_update_active());
+
+        // Query DECRQM ?2026$p
+        grid.advance_bytes(b"\x1b[?2026$p");
+        assert_eq!(grid.responses.len(), 1);
+        assert_eq!(grid.responses[0], b"\x1b[?2026;1$y");
+        grid.responses.clear();
+
+        // Disable mode ?2026l
+        grid.advance_bytes(b"\x1b[?2026l");
+        assert!(!grid.in_sync_update);
+        assert!(!grid.is_sync_update_active());
+
+        // Query DECRQM when reset
+        grid.advance_bytes(b"\x1b[?2026$p");
+        assert_eq!(grid.responses.len(), 1);
+        assert_eq!(grid.responses[0], b"\x1b[?2026;2$y");
+    }
+
+    #[test]
+    fn test_row_level_dirty_bitmask() {
+        let mut grid = TerminalGrid::new(20, 10);
+        grid.clear_dirty_rows();
+        assert!(!grid.dirty);
+        for r in 0..10 {
+            assert!(!grid.is_row_dirty(r));
+        }
+
+        // Typing characters on row 0
+        grid.advance_bytes(b"prompt>");
+        assert!(grid.dirty);
+        assert!(grid.is_row_dirty(0));
+        // All other rows remain clean
+        for r in 1..10 {
+            assert!(!grid.is_row_dirty(r));
+        }
+
+        // Clear dirty rows and move cursor to row 3
+        grid.clear_dirty_rows();
+        grid.advance_bytes(b"\x1b[4;1Hhello");
+        assert!(grid.is_row_dirty(3));
+        assert!(!grid.is_row_dirty(0));
+        assert!(!grid.is_row_dirty(1));
+        assert!(!grid.is_row_dirty(2));
+        assert!(!grid.is_row_dirty(4));
     }
 }

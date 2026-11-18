@@ -43,15 +43,31 @@ impl PtyManager {
         let mut cmd = CommandBuilder::new("powershell.exe");
         cmd.arg("-NoLogo");
 
-        // Ensure built-in `luna.exe` (next to lunula_terminal.exe) is automatically on PATH
+        // Ensure built-in `luna.exe` and `lfetch.exe` (next to lunula_terminal.exe) are automatically on PATH
+        let mut lfetch_exe_opt = None;
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 let current_path = std::env::var("PATH").unwrap_or_default();
                 let new_path = format!("{};{}", exe_dir.display(), current_path);
                 cmd.env("PATH", new_path);
+
+                let target_lfetch = exe_dir.join("lfetch.exe");
+                if target_lfetch.exists() {
+                    lfetch_exe_opt = Some(target_lfetch);
+                }
             }
         }
         cmd.env("EDITOR", "luna");
+        cmd.env("LUNULA_TERMINAL", "1");
+        cmd.env("TERM_PROGRAM", "lunula_terminal");
+        cmd.env("TERM", "xterm-256color");
+
+        // Auto-launch lfetch on startup if found
+        if let Some(lfetch_path) = lfetch_exe_opt {
+            cmd.arg("-NoExit");
+            cmd.arg("-Command");
+            cmd.arg(format!("& '{}'", lfetch_path.display()));
+        }
 
         let child = pair.slave.spawn_command(cmd)?;
 

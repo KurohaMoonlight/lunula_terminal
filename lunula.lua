@@ -24,6 +24,8 @@ return {
         max_deform = 55.0,
         -- Shear diagonal stiffness
         spring_shear = 300.0,
+        -- Reaktivitas ombak Kanagawa di titlebar saat window digeser (0 = mati, 1 = normal, maks 3)
+        wave_reactivity = 1.0,
     },
     terminal = {
         font_family = "0xProto Nerd Font Mono", -- Font monospace/nerd font (auto-fallback jika tidak ditemukan)

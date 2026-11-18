@@ -11,6 +11,9 @@ mod render;
 mod terminal;
 mod wobble;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use app::LunulaApp;
 use winit::event_loop::{ControlFlow, EventLoop};
 

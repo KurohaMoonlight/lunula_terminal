@@ -29,6 +29,10 @@ pub struct Uniforms {
     pub hover_button: f32,
     /// 1.0 when the swapchain is an sRGB format (shader linearises its palette).
     pub srgb_target: f32,
+    /// (energy 0..1, horizontal slosh px, vertical bob px, extra wave time s)
+    pub wave: [f32; 4],
+    /// (surface tilt -1..1, reserved, reserved, reserved)
+    pub wave2: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +57,10 @@ pub struct WobbleWindow {
     pub(crate) grab_uv: [f32; 2],
     pub(crate) prev_time: Instant,
     pub external_vel: [f32; 2],
+
+    /// Reactive Kanagawa wave state (see `physics::update_wave`).
+    pub(crate) wave: physics::WaveState,
+    pub wave_reactivity: f32,
 
     #[allow(dead_code)]
     content_texture: wgpu::Texture,
@@ -241,6 +249,8 @@ impl WobbleWindow {
             is_maximized: 0.0,
             hover_button: 0.0,
             srgb_target: if surface_format.is_srgb() { 1.0 } else { 0.0 },
+            wave: [0.0; 4],
+            wave2: [0.0; 4],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Wobble UB"),
@@ -368,6 +378,8 @@ impl WobbleWindow {
             grab_uv: [0.5, 0.05],
             prev_time: Instant::now(),
             external_vel: [0.0, 0.0],
+            wave: physics::WaveState::default(),
+            wave_reactivity: wobble_cfg.wave_reactivity,
             content_texture,
             content_view,
             content_size,
@@ -570,6 +582,8 @@ impl WobbleWindow {
             is_maximized: if self.is_maximized { 1.0 } else { 0.0 },
             hover_button: self.hover_button,
             srgb_target: if self.surface_format.is_srgb() { 1.0 } else { 0.0 },
+            wave: self.wave.uniform_wave(),
+            wave2: self.wave.uniform_wave2(),
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 

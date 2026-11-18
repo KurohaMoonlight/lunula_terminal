@@ -7,9 +7,11 @@
 
 pub mod item;
 pub mod tree;
+pub mod vi_mode;
 
 pub use item::{Pane, PANE_PAD};
 pub use tree::{NavDirection, PaneNode, SplitDirection};
+pub use vi_mode::{ViMode, ViModeKind};
 
 use crate::config::LunulaConfig;
 use crate::render::TextEngine;

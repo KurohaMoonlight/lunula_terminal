@@ -29,3 +29,10 @@ Dokumen ini menjelaskan arsitektur internal `lunula_terminal` setelah refaktoris
 5. **Two-Pass WGPU Rendering & Wobble Physics (`src/wobble/`, `src/app/render.rs`)**:
    - **Pass 1 (Offscreen Content Texture)**: `TextEngine` menggambar seluruh `BgRect` dan *glyph* teks (`glyphon`) ke tekstur *offscreen* `wobble.content_view`. Pergeseran *smooth scroll* sub-piksel (`scroll_subpixel_y`) diterapkan langsung pada koordinat vertikal `BgRect` dan `TextArea.top`.
    - **Pass 2 (Swapchain Jelly Mesh)**: `WobbleWindow` memetakan tekstur *offscreen* tersebut ke atas jaring pegas 10×8 (`GRID_COLS × GRID_ROWS`) dengan *drop shadow* dan tombol kontrol jendela di `wobble.wgsl`.
+
+
+---
+
+## Ombak Kanagawa Reaktif
+
+`WaveState` (`src/wobble/physics.rs`) memodelkan air di dalam nampan: saat window digeser, osilator pegas *underdamped* mendorong air ke belakang (`slosh`), naik-turun (`bob`), dan menaikkan `energy`. Saat dilepas, air meluncur ke depan dan bergoyang hingga tenang (~1.5 dtk). Nilainya dikirim sebagai uniform `wave`/`wave2` ke `kanagawa_ink_wave` di `wobble.wgsl`, yang menggeser profil ombak, memiringkan permukaan, meninggikan swell, mempertajam lengkung depan, memperbanyak percikan, dan mempercepat/membalik arah aliran. Atur dengan `wobble.wave_reactivity` di `lunula.lua` (0 = mati, default 1.0).

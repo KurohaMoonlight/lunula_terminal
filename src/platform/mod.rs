@@ -24,9 +24,24 @@ struct SYSTEMTIME {
 unsafe extern "system" {
     fn GetCursorPos(lp: *mut POINT) -> i32;
     fn GetLocalTime(lpSystemTime: *mut SYSTEMTIME);
+    fn GetCurrentProcess() -> isize;
+    fn SetProcessWorkingSetSize(
+        hProcess: isize,
+        dwMinimumWorkingSetSize: usize,
+        dwMaximumWorkingSetSize: usize,
+    ) -> i32;
 }
 
 pub mod clipboard;
+
+/// Trims the process working set, freeing pages left behind by startup initialization
+/// (such as shader translation ASTs, system font directory indexing, and driver initialization).
+#[inline]
+pub fn trim_working_set() {
+    unsafe {
+        SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+}
 
 /// Returns the current physical desktop cursor coordinates `(x, y)` via Win32 `GetCursorPos`.
 #[inline]
