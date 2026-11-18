@@ -77,10 +77,10 @@ impl TerminalGrid {
             current_scroll_y: 0.0,
             selection: None,
             selection_color: ColorRgb {
-                r: 88,
-                g: 91,
-                b: 112,
-            },
+                r: 45,
+                g: 79,
+                b: 103,
+            }, // Kanagawa waveBlue2 (#2D4F67)
             parser: Parser::new(),
             dirty: true,
             responses: Vec::new(),

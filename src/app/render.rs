@@ -142,15 +142,15 @@ impl GpuState {
                 w: center_pill_w,
                 h: 28.0,
                 color: terminal::ColorRgb { r: 31, g: 31, b: 40 }, // sumiInk3
-                alpha: 0.65, // Frosted glass lets ink wave subtly shine through
+                alpha: 0.55, // Smoked-ink glass lets the wave shine through
             });
             bg_rects.push(terminal::BgRect {
                 x: center_pill_x,
                 y: 37.0,
                 w: center_pill_w,
                 h: 1.0,
-                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // sumiInk5
-                alpha: 0.50,
+                color: terminal::ColorRgb { r: 45, g: 79, b: 103 }, // waveBlue2 hairline
+                alpha: 0.55,
             });
         }
 
@@ -322,9 +322,9 @@ impl GpuState {
                         w: 20.0,
                         h: 20.0,
                         color: if is_hovered {
-                            terminal::ColorRgb { r: 243, g: 139, b: 168 }
+                            terminal::ColorRgb { r: 195, g: 64, b: 67 } // Kanagawa autumnRed
                         } else {
-                            terminal::ColorRgb { r: 49, g: 50, b: 68 }
+                            terminal::ColorRgb { r: 42, g: 42, b: 55 } // Kanagawa sumiInk4
                         },
                         alpha: if is_hovered { 0.95 } else { 0.65 },
                     });
@@ -333,7 +333,7 @@ impl GpuState {
                         y: btn_y + 9.0,
                         w: 10.0,
                         h: 2.0,
-                        color: terminal::ColorRgb { r: 205, g: 214, b: 244 },
+                        color: terminal::ColorRgb { r: 220, g: 215, b: 186 }, // Kanagawa fujiWhite
                         alpha: 0.90,
                     });
                 }
@@ -344,7 +344,7 @@ impl GpuState {
                         y: py,
                         w: pw,
                         h: ph,
-                        color: terminal::ColorRgb { r: 17, g: 17, b: 27 },
+                        color: terminal::ColorRgb { r: 22, g: 22, b: 29 }, // Kanagawa sumiInk0
                         alpha: self.config.tabs.dim_opacity,
                     });
                 }
@@ -423,7 +423,7 @@ impl GpuState {
                 y: sep[1],
                 w: sep[2],
                 h: sep[3],
-                color: terminal::ColorRgb { r: 69, g: 71, b: 90 },
+                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // Kanagawa sumiInk5
                 alpha: 0.95,
             });
         }
@@ -440,7 +440,7 @@ impl GpuState {
                 y: 0.0,
                 w: content_w,
                 h: content_h,
-                color: terminal::ColorRgb { r: 17, g: 17, b: 27 },
+                color: terminal::ColorRgb { r: 22, g: 22, b: 29 }, // Kanagawa sumiInk0
                 alpha: 0.78,
             });
             bg_rects.push(terminal::BgRect {
@@ -448,7 +448,7 @@ impl GpuState {
                 y: card_y + 10.0,
                 w: card_w,
                 h: card_h,
-                color: terminal::ColorRgb { r: 0, g: 0, b: 0 },
+                color: terminal::ColorRgb { r: 12, g: 12, b: 18 },
                 alpha: 0.50,
             });
             bg_rects.push(terminal::BgRect {
@@ -456,7 +456,7 @@ impl GpuState {
                 y: card_y,
                 w: card_w,
                 h: card_h,
-                color: terminal::ColorRgb { r: 24, g: 24, b: 37 },
+                color: terminal::ColorRgb { r: 24, g: 24, b: 32 }, // Kanagawa sumiInk1
                 alpha: 0.98,
             });
             bg_rects.push(terminal::BgRect {
@@ -464,7 +464,7 @@ impl GpuState {
                 y: card_y,
                 w: card_w,
                 h: 3.5,
-                color: terminal::ColorRgb { r: 180, g: 190, b: 254 },
+                color: terminal::ColorRgb { r: 127, g: 180, b: 202 }, // Kanagawa springBlue accent
                 alpha: 1.0,
             });
             bg_rects.push(terminal::BgRect {
@@ -472,7 +472,7 @@ impl GpuState {
                 y: card_y + 3.5,
                 w: 1.0,
                 h: card_h - 3.5,
-                color: terminal::ColorRgb { r: 69, g: 71, b: 90 },
+                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // Kanagawa sumiInk5
                 alpha: 0.85,
             });
             bg_rects.push(terminal::BgRect {
@@ -480,7 +480,7 @@ impl GpuState {
                 y: card_y + 3.5,
                 w: 1.0,
                 h: card_h - 3.5,
-                color: terminal::ColorRgb { r: 69, g: 71, b: 90 },
+                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // Kanagawa sumiInk5
                 alpha: 0.85,
             });
             bg_rects.push(terminal::BgRect {
@@ -488,7 +488,7 @@ impl GpuState {
                 y: card_y + card_h - 1.0,
                 w: card_w,
                 h: 1.0,
-                color: terminal::ColorRgb { r: 69, g: 71, b: 90 },
+                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // Kanagawa sumiInk5
                 alpha: 0.85,
             });
 
@@ -504,9 +504,9 @@ impl GpuState {
                 w: 24.0,
                 h: 24.0,
                 color: if is_close_hovered {
-                    terminal::ColorRgb { r: 243, g: 139, b: 168 }
+                    terminal::ColorRgb { r: 195, g: 64, b: 67 } // Kanagawa autumnRed
                 } else {
-                    terminal::ColorRgb { r: 49, g: 50, b: 68 }
+                    terminal::ColorRgb { r: 42, g: 42, b: 55 } // Kanagawa sumiInk4
                 },
                 alpha: if is_close_hovered { 0.95 } else { 0.70 },
             });
@@ -515,7 +515,7 @@ impl GpuState {
                 y: close_y + 11.0,
                 w: 12.0,
                 h: 2.0,
-                color: terminal::ColorRgb { r: 205, g: 214, b: 244 },
+                color: terminal::ColorRgb { r: 220, g: 215, b: 186 }, // Kanagawa fujiWhite
                 alpha: 0.95,
             });
 
@@ -532,8 +532,8 @@ impl GpuState {
                     y: track_y,
                     w: track_w,
                     h: track_h,
-                    color: terminal::ColorRgb { r: 49, g: 50, b: 68 },
-                    alpha: 0.45,
+                    color: terminal::ColorRgb { r: 31, g: 31, b: 40 }, // Kanagawa sumiInk3
+                    alpha: 0.50,
                 });
 
                 let thumb_ratio = (visible_h / self.help_total_height).clamp(0.1, 0.9);
@@ -562,14 +562,14 @@ impl GpuState {
                         },
                     h: thumb_h,
                     color: if self.help_dragging_scrollbar || is_thumb_hovered {
-                        terminal::ColorRgb { r: 180, g: 190, b: 254 }
+                        terminal::ColorRgb { r: 127, g: 180, b: 202 } // Kanagawa springBlue
                     } else {
-                        terminal::ColorRgb { r: 108, g: 112, b: 134 }
+                        terminal::ColorRgb { r: 45, g: 79, b: 103 } // Kanagawa waveBlue2
                     },
                     alpha: if self.help_dragging_scrollbar || is_thumb_hovered {
                         0.95
                     } else {
-                        0.70
+                        0.75
                     },
                 });
             }
@@ -685,7 +685,7 @@ impl GpuState {
                         right: (pane.rect[0] + pane.rect[2] - pane::PANE_PAD) as i32,
                         bottom: (pane.rect[1] + pane.rect[3] - pane::PANE_PAD) as i32,
                     },
-                    default_color: glyphon::Color::rgb(205, 214, 244),
+                    default_color: glyphon::Color::rgb(220, 215, 186),
                     custom_glyphs: &[],
                 });
             }
@@ -705,7 +705,7 @@ impl GpuState {
                     right: (card_x + card_w - 20.0) as i32,
                     bottom: (card_y + card_h - padding_bottom) as i32,
                 },
-                default_color: glyphon::Color::rgb(205, 214, 244),
+                default_color: glyphon::Color::rgb(220, 215, 186),
                 custom_glyphs: &[],
             });
         }
@@ -771,10 +771,18 @@ impl GpuState {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(if self.is_maximized {
+                            // sumiInk0 #16161D (linearised on sRGB targets)
+                            let lin = |c: f32| {
+                                if self.text_engine.srgb_target {
+                                    crate::render::srgb_to_linear(c)
+                                } else {
+                                    c
+                                }
+                            };
                             wgpu::Color {
-                                r: 0.086,
-                                g: 0.086,
-                                b: 0.114,
+                                r: lin(22.0 / 255.0) as f64,
+                                g: lin(22.0 / 255.0) as f64,
+                                b: lin(29.0 / 255.0) as f64,
                                 a: 1.0,
                             }
                         } else {

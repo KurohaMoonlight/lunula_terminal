@@ -27,7 +27,8 @@ pub struct Uniforms {
     pub time: f32,
     pub is_maximized: f32,
     pub hover_button: f32,
-    pub _pad0: f32,
+    /// 1.0 when the swapchain is an sRGB format (shader linearises its palette).
+    pub srgb_target: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,7 +240,7 @@ impl WobbleWindow {
             time: 0.0,
             is_maximized: 0.0,
             hover_button: 0.0,
-            _pad0: 0.0,
+            srgb_target: if surface_format.is_srgb() { 1.0 } else { 0.0 },
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Wobble UB"),
@@ -568,7 +569,7 @@ impl WobbleWindow {
             time: elapsed,
             is_maximized: if self.is_maximized { 1.0 } else { 0.0 },
             hover_button: self.hover_button,
-            _pad0: 0.0,
+            srgb_target: if self.surface_format.is_srgb() { 1.0 } else { 0.0 },
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 

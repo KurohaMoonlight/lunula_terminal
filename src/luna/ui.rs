@@ -1,4 +1,4 @@
-//! Catppuccin Mocha ANSI/TrueColor TUI renderer for `luna`.
+//! Kanagawa Wave ANSI/TrueColor TUI renderer for `luna`.
 
 use super::buffer::TextBuffer;
 use std::io::{self, BufWriter, Write};
@@ -41,7 +41,7 @@ pub fn render_to<W: Write>(
     // Hide cursor while drawing frame
     out.write_all(b"\x1b[?25l")?;
 
-    // 1. Top Header Bar (Row 1): Catppuccin Mantle #181825 + Lavender #b4befe
+    // 1. Top Header Bar (Row 1): Kanagawa sumiInk0 #16161D + springBlue #7fb4ca
     // Position explicitly with absolute row coordinates (no trailing \r\n to prevent viewport scrolling)
     let modified_tag = if buf.dirty { " [Modified]" } else { "" };
     let left_title = format!("  🌙 LUNA  │  {}{}", buf.filename_display(), modified_tag);
@@ -56,7 +56,7 @@ pub fn render_to<W: Write>(
 
     write!(
         out,
-        "\x1b[1;1H\x1b[48;2;24;24;37m\x1b[38;2;180;190;254m\x1b[1m{}\x1b[0m\x1b[48;2;24;24;37m\x1b[38;2;166;173;200m{}{}\x1b[K\x1b[0m",
+        "\x1b[1;1H\x1b[48;2;22;22;29m\x1b[38;2;127;180;202m\x1b[1m{}\x1b[0m\x1b[48;2;22;22;29m\x1b[38;2;200;192;147m{}{}\x1b[K\x1b[0m",
         left_title,
         " ".repeat(pad),
         right_pos
@@ -74,14 +74,14 @@ pub fn render_to<W: Write>(
             if is_active_line {
                 write!(
                     out,
-                    "\x1b[38;2;180;190;254m\x1b[1m{:>width$} \x1b[0m\x1b[38;2;69;71;90m│ \x1b[0m",
+                    "\x1b[38;2;230;195;132m\x1b[1m{:>width$} \x1b[0m\x1b[38;2;54;54;70m│ \x1b[0m",
                     line_idx + 1,
                     width = total_lines_digits
                 )?;
             } else {
                 write!(
                     out,
-                    "\x1b[38;2;108;112;134m{:>width$} \x1b[38;2;69;71;90m│ \x1b[0m",
+                    "\x1b[38;2;114;113;105m{:>width$} \x1b[38;2;54;54;70m│ \x1b[0m",
                     line_idx + 1,
                     width = total_lines_digits
                 )?;
@@ -93,11 +93,11 @@ pub fn render_to<W: Write>(
                 .skip(buf.scroll_col)
                 .take(text_cols)
                 .collect();
-            write!(out, "\x1b[38;2;205;214;244m{}\x1b[K\x1b[0m", visible)?;
+            write!(out, "\x1b[38;2;220;215;186m{}\x1b[K\x1b[0m", visible)?;
         } else {
             write!(
                 out,
-                "\x1b[38;2;88;91;112m{:>width$} │ ~\x1b[K\x1b[0m",
+                "\x1b[38;2;54;54;70m{:>width$} │ ~\x1b[K\x1b[0m",
                 "",
                 width = total_lines_digits
             )?;
@@ -111,20 +111,20 @@ pub fn render_to<W: Write>(
         PromptMode::Search(query) => {
             write!(
                 out,
-                "\x1b[48;2;49;50;68m\x1b[38;2;249;226;175m Search: \x1b[38;2;205;214;244m{}\x1b[K\x1b[0m",
+                "\x1b[48;2;45;79;103m\x1b[38;2;230;195;132m Search: \x1b[38;2;220;215;186m{}\x1b[K\x1b[0m",
                 query
             )?;
         }
         PromptMode::ConfirmExit => {
             write!(
                 out,
-                "\x1b[48;2;243;139;168m\x1b[38;2;17;17;27m\x1b[1m Save modified buffer? (Y = Save, N = Discard, Esc = Cancel)\x1b[K\x1b[0m"
+                "\x1b[48;2;195;64;67m\x1b[38;2;22;22;29m\x1b[1m Save modified buffer? (Y = Save, N = Discard, Esc = Cancel)\x1b[K\x1b[0m"
             )?;
         }
         PromptMode::None => {
             write!(
                 out,
-                "\x1b[48;2;30;30;46m\x1b[38;2;166;227;161m {}\x1b[K\x1b[0m",
+                "\x1b[48;2;31;31;40m\x1b[38;2;152;187;108m {}\x1b[K\x1b[0m",
                 status_msg
             )?;
         }
@@ -133,7 +133,7 @@ pub fn render_to<W: Write>(
     // 4. Bottom Shortcut Legend (Row rows_safe)
     write!(
         out,
-        "\x1b[{};1H\x1b[48;2;24;24;37m\x1b[38;2;137;180;250m ^S \x1b[38;2;186;194;222mSave   \x1b[38;2;137;180;250m^X \x1b[38;2;186;194;222mExit   \x1b[38;2;137;180;250m^F \x1b[38;2;186;194;222mFind   \x1b[38;2;137;180;250m^Z \x1b[38;2;186;194;222mUndo\x1b[K\x1b[0m",
+        "\x1b[{};1H\x1b[48;2;22;22;29m\x1b[38;2;127;180;202m ^S \x1b[38;2;200;192;147mSave   \x1b[38;2;127;180;202m^X \x1b[38;2;200;192;147mExit   \x1b[38;2;127;180;202m^F \x1b[38;2;200;192;147mFind   \x1b[38;2;127;180;202m^Z \x1b[38;2;200;192;147mUndo\x1b[K\x1b[0m",
         rows_safe
     )?;
 

@@ -40,7 +40,7 @@ return {
         -- Efek berkedip lembut (sine smooth blinking)
         blinking = true,
         -- Warna kursor (hex atau {r, g, b})
-        color = "#b4befe", -- Catppuccin Lavender
+        color = "#7fb4ca", -- Kanagawa springBlue
         -- Kitty-style elastic cursor trail (ekor smear elastis saat kursor melompat)
         trail = true,
         trail_stiffness = 550.0,
@@ -63,7 +63,7 @@ return {
     },
     colors = {
         -- Warna highlight teks yang di-select mouse
-        selection = "#585b70",
+        selection = "#2d4f67", -- Kanagawa waveBlue2
     },
 }
 "##;

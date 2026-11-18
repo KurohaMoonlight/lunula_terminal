@@ -60,7 +60,7 @@ impl TerminalGrid {
                 let mut eff_style = cell.style;
                 if is_selected {
                     eff_style.bg = Some(self.selection_color);
-                    eff_style.fg = Some(ColorRgb { r: 245, g: 245, b: 255 });
+                    eff_style.fg = Some(ColorRgb { r: 220, g: 215, b: 186 }); // Kanagawa fujiWhite
                 } else if eff_style.reverse() {
                     std::mem::swap(&mut eff_style.fg, &mut eff_style.bg);
                 }
@@ -88,7 +88,7 @@ impl TerminalGrid {
 
                 // 2. Block cursor cell styling (invert text to dark for readability)
                 if is_cursor && self.cursor_config.shape == CursorShape::Block {
-                    eff_style.fg = Some(ColorRgb { r: 17, g: 17, b: 27 });
+                    eff_style.fg = Some(ColorRgb { r: 22, g: 22, b: 29 }); // Kanagawa sumiInk0 (#16161D)
                 }
 
                 // 3. Underline decoration (Run-Length Merged)
@@ -96,7 +96,7 @@ impl TerminalGrid {
                     let u_color = eff_style
                         .underline_color
                         .or(eff_style.fg)
-                        .unwrap_or(ColorRgb { r: 205, g: 214, b: 244 });
+                        .unwrap_or(ColorRgb { r: 220, g: 215, b: 186 }); // Kanagawa fujiWhite
                     push_bg_rect_merged(
                         &mut bg_rects,
                         BgRect {
@@ -112,7 +112,7 @@ impl TerminalGrid {
 
                 // 4. Strikethrough decoration (Run-Length Merged)
                 if eff_style.strikethrough() {
-                    let s_color = eff_style.fg.unwrap_or(ColorRgb { r: 205, g: 214, b: 244 });
+                    let s_color = eff_style.fg.unwrap_or(ColorRgb { r: 220, g: 215, b: 186 }); // Kanagawa fujiWhite
                     push_bg_rect_merged(
                         &mut bg_rects,
                         BgRect {
@@ -130,7 +130,7 @@ impl TerminalGrid {
                 if eff_style.undercurl() {
                     let c_color = eff_style
                         .underline_color
-                        .unwrap_or(ColorRgb { r: 243, g: 139, b: 168 });
+                        .unwrap_or(ColorRgb { r: 195, g: 64, b: 67 }); // Kanagawa autumnRed
                     let w = x1 - x0;
                     let mid_x = x0 + w * 0.5;
                     bg_rects.push(BgRect {
@@ -158,7 +158,7 @@ impl TerminalGrid {
 
                 // Text glyph character is 100% pure (no fake cursor characters)
                 let mut ch = cell.c;
-                let glyph_color = eff_style.fg.unwrap_or(ColorRgb { r: 205, g: 214, b: 244 });
+                let glyph_color = eff_style.fg.unwrap_or(ColorRgb { r: 220, g: 215, b: 186 }); // Kanagawa fujiWhite
                 if render_procedural_glyph(ch, x0, x1, y0, y1, glyph_color, &mut bg_rects) {
                     ch = ' ';
                 }

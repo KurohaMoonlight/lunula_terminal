@@ -8,24 +8,24 @@ pub struct ColorRgb {
 }
 
 pub fn ansi_16_color(idx: usize) -> ColorRgb {
-    // Catppuccin Mocha 16-color palette
+    // Kanagawa Wave 16-color authentic pigment palette
     const PALETTE: [ColorRgb; 16] = [
-        ColorRgb { r: 69, g: 71, b: 90 },    // 0: Black (Surface 1)
-        ColorRgb { r: 243, g: 139, b: 168 }, // 1: Red
-        ColorRgb { r: 166, g: 227, b: 161 }, // 2: Green
-        ColorRgb { r: 249, g: 226, b: 175 }, // 3: Yellow
-        ColorRgb { r: 137, g: 180, b: 250 }, // 4: Blue
-        ColorRgb { r: 245, g: 194, b: 231 }, // 5: Magenta (Pink)
-        ColorRgb { r: 148, g: 226, b: 213 }, // 6: Cyan (Teal)
-        ColorRgb { r: 186, g: 194, b: 222 }, // 7: White (Subtext 1)
-        ColorRgb { r: 88, g: 91, b: 112 },   // 8: Bright Black (Surface 2)
-        ColorRgb { r: 235, g: 160, b: 172 }, // 9: Bright Red (Maroon)
-        ColorRgb { r: 166, g: 227, b: 161 }, // 10: Bright Green
-        ColorRgb { r: 249, g: 226, b: 175 }, // 11: Bright Yellow
-        ColorRgb { r: 137, g: 220, b: 235 }, // 12: Bright Blue (Sky)
-        ColorRgb { r: 203, g: 166, b: 247 }, // 13: Bright Magenta (Mauve)
-        ColorRgb { r: 137, g: 220, b: 235 }, // 14: Bright Cyan (Sky)
-        ColorRgb { r: 205, g: 214, b: 244 }, // 15: Bright White (Text)
+        ColorRgb { r: 22, g: 22, b: 29 },    // 0: Black (sumiInk0 #16161D)
+        ColorRgb { r: 195, g: 64, b: 67 },   // 1: Red (autumnRed #C34043)
+        ColorRgb { r: 118, g: 148, b: 106 }, // 2: Green (autumnGreen #76946A)
+        ColorRgb { r: 192, g: 163, b: 110 }, // 3: Yellow (boatYellow1 #C0A36E)
+        ColorRgb { r: 126, g: 156, b: 216 }, // 4: Blue (crystalBlue #7E9CD8)
+        ColorRgb { r: 149, g: 127, b: 184 }, // 5: Magenta (oniViolet #957FB8)
+        ColorRgb { r: 106, g: 149, b: 137 }, // 6: Cyan (waveAqua1 #6A9589)
+        ColorRgb { r: 200, g: 192, b: 147 }, // 7: White (oldWhite #C8C093)
+        ColorRgb { r: 114, g: 113, b: 105 }, // 8: Bright Black (fujiGray #727169)
+        ColorRgb { r: 232, g: 36, b: 36 },   // 9: Bright Red (samuraiRed #E82424)
+        ColorRgb { r: 152, g: 187, b: 108 }, // 10: Bright Green (springGreen #98BB6C)
+        ColorRgb { r: 230, g: 195, b: 132 }, // 11: Bright Yellow (boatYellow2 #E6C384)
+        ColorRgb { r: 127, g: 180, b: 202 }, // 12: Bright Blue (springBlue #7FB4CA)
+        ColorRgb { r: 210, g: 126, b: 153 }, // 13: Bright Magenta (sakuraPink #D27E99)
+        ColorRgb { r: 122, g: 168, b: 159 }, // 14: Bright Cyan (waveAqua2 #7AA89F)
+        ColorRgb { r: 220, g: 215, b: 186 }, // 15: Bright White (fujiWhite #DCD7BA)
     ];
     PALETTE[idx.min(15)]
 }
@@ -69,7 +69,7 @@ impl Default for CursorConfig {
         Self {
             shape: CursorShape::Block,
             blinking: true,
-            color: ColorRgb { r: 180, g: 190, b: 254 }, // Catppuccin Lavender
+            color: ColorRgb { r: 127, g: 180, b: 202 }, // Kanagawa springBlue (#7FB4CA)
         }
     }
 }

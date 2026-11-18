@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(cfg.terminal.font_size, 14.5);
         assert_eq!(cfg.cursor.shape, "block");
         assert!(cfg.cursor.trail);
-        assert_eq!(cfg.colors.selection, [88, 91, 112]);
+        assert_eq!(cfg.colors.selection, [45, 79, 103]);
     }
 
     #[test]

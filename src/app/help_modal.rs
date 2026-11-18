@@ -7,19 +7,19 @@ pub fn build_help_buffer(text_engine: &mut TextEngine, buffer: &mut glyphon::Buf
     let mut spans = Vec::with_capacity(48);
 
     let header_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 180, g: 190, b: 254 })
+        .with_fg(ColorRgb { r: 126, g: 156, b: 216 }) // Kanagawa crystalBlue (#7E9CD8)
         .with_bold(true);
     let section_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 249, g: 226, b: 175 })
+        .with_fg(ColorRgb { r: 230, g: 195, b: 132 }) // Kanagawa boatYellow2 (#E6C384)
         .with_bold(true);
     let key_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 166, g: 227, b: 161 })
+        .with_fg(ColorRgb { r: 152, g: 187, b: 108 }) // Kanagawa springGreen (#98BB6C)
         .with_bold(true);
-    let desc_style = CellStyle::new().with_fg(ColorRgb { r: 205, g: 214, b: 244 });
+    let desc_style = CellStyle::new().with_fg(ColorRgb { r: 220, g: 215, b: 186 }); // Kanagawa fujiWhite (#DCD7BA)
     let sub_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 147, g: 153, b: 178 })
+        .with_fg(ColorRgb { r: 114, g: 113, b: 105 }) // Kanagawa fujiGray (#727169)
         .with_dim(true);
-    let border_style = CellStyle::new().with_fg(ColorRgb { r: 108, g: 112, b: 134 });
+    let border_style = CellStyle::new().with_fg(ColorRgb { r: 54, g: 54, b: 70 }); // Kanagawa sumiInk5 (#363646)
 
     spans.push((
         "  🌙 LUNULA TERMINAL ── Shortcuts & Features Reference\n".to_string(),

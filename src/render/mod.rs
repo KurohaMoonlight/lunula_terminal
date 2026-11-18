@@ -50,6 +50,24 @@ impl BgVertex {
 }
 
 #[allow(dead_code)]
+
+/// sRGB-encoded channel (0..1) -> linear light. Needed because the swapchain is an sRGB
+/// format: hex colours written straight into vertex colours would otherwise look washed-out.
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+fn srgb_u8_lut() -> &'static [f32; 256] {
+    static LUT: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut t = [0.0f32; 256];
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = srgb_to_linear(i as f32 / 255.0);
+        }
+        t
+    })
+}
+
 pub struct TextEngine {
     pub font_system: FontSystem,
     pub font_family: String,
@@ -73,6 +91,8 @@ pub struct TextEngine {
     pub bg_vertex_capacity: usize,
     pub bg_vertex_count: u32,
     scratch_vertices: Vec<BgVertex>,
+    /// True when the render target is an sRGB format: palette bytes must be linearised.
+    pub srgb_target: bool,
 }
 
 impl TextEngine {
@@ -272,6 +292,7 @@ impl TextEngine {
             bg_vertex_capacity: initial_capacity,
             bg_vertex_count: 0,
             scratch_vertices: Vec::with_capacity(initial_capacity),
+            srgb_target: format.is_srgb(),
         }
     }
 
@@ -355,13 +376,23 @@ impl TextEngine {
                     .reserve(num_vertices - self.scratch_vertices.capacity());
             }
 
+            let lut = srgb_u8_lut();
             for rect in bg_rects {
-                let c = [
-                    rect.color.r as f32 / 255.0,
-                    rect.color.g as f32 / 255.0,
-                    rect.color.b as f32 / 255.0,
-                    rect.alpha,
-                ];
+                let c = if self.srgb_target {
+                    [
+                        lut[rect.color.r as usize],
+                        lut[rect.color.g as usize],
+                        lut[rect.color.b as usize],
+                        rect.alpha,
+                    ]
+                } else {
+                    [
+                        rect.color.r as f32 / 255.0,
+                        rect.color.g as f32 / 255.0,
+                        rect.color.b as f32 / 255.0,
+                        rect.alpha,
+                    ]
+                };
                 let x0 = rect.x;
                 let y0 = rect.y;
                 let x1 = rect.x + rect.w;
@@ -423,14 +454,14 @@ impl TextEngine {
         let family = Family::Name(&self.font_family);
         let default_attrs = Attrs::new()
             .family(family)
-            .color(Color::rgb(205, 214, 244));
+            .color(Color::rgb(220, 215, 186));
 
         let rich_spans = spans.iter().map(|(text, style)| {
             let mut attrs = Attrs::new().family(family);
             let mut color = style.fg.unwrap_or(ColorRgb {
-                r: 205,
-                g: 214,
-                b: 244,
+                r: 220,
+                g: 215,
+                b: 186,
             });
             if style.dim() {
                 color = ColorRgb {
@@ -476,7 +507,7 @@ impl TextEngine {
             top: pos_y,
             scale: 1.0,
             bounds: TextBounds::default(),
-            default_color: Color::rgb(205, 214, 244),
+            default_color: Color::rgb(220, 215, 186),
             custom_glyphs: &[],
         };
 

@@ -16,7 +16,7 @@ struct Uniforms {
     time: f32,
     is_maximized: f32,
     hover_button: f32, // 0.0=none, 1.0=close, 2.0=minimize, 3.0=maximize
-    _pad0: f32,
+    srgb_target: f32,  // 1.0 when the swapchain is *Srgb (palette must be linearised)
 };
 
 @group(0) @binding(0)
@@ -38,63 +38,190 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     return out;
 }
 
-// Kanagawa Sumi-e Ink Wave generator for the titlebar background
-fn kanagawa_ink_wave(px: f32, py: f32, time: f32, total_w: f32, th: f32) -> vec4<f32> {
-    // Kanagawa Wave color palette
-    let sumi_ink0   = vec3<f32>(0.086, 0.086, 0.114); // #16161D (deepest ink stone)
-    let sumi_ink1   = vec3<f32>(0.133, 0.196, 0.286); // #223249 (waveBlue1 - deep indigo ocean)
-    let wave_blue   = vec3<f32>(0.176, 0.310, 0.404); // #2D4F67 (waveBlue2 - Prussian blue wave body)
-    let wave_aqua   = vec3<f32>(0.416, 0.584, 0.537); // #6A9589 (waveAqua1 - sea foam green)
-    let spring_blue = vec3<f32>(0.498, 0.706, 0.792); // #7FB4CA (springBlue - wave foam crest)
-    let fuji_white  = vec3<f32>(0.863, 0.843, 0.729); // #DCD7BA (fujiWhite - washi paper white tip)
+// ─────────────────────────────────────────────────────────────────────────────
+// Colour helpers — palette is written as the real Kanagawa hex values (0..255)
+// and converted to the swapchain's working space here.
+// ─────────────────────────────────────────────────────────────────────────────
+fn s2l(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
 
-    // Vertical ink wash base gradient
-    let grad = clamp(py / th, 0.0, 1.0);
-    var base_col = mix(sumi_ink0, sumi_ink1 * 0.7, grad * 0.9);
+fn hex(r: f32, g: f32, b: f32) -> vec3<f32> {
+    let c = vec3<f32>(r, g, b) / 255.0;
+    if (uniforms.srgb_target > 0.5) {
+        return s2l(c);
+    }
+    return c;
+}
 
-    // Layer 1: Slow, deep oceanic swell (Layer paling belakang)
-    let w1_x = px * 0.006 + time * 0.3;
-    let wave1_y = th * 0.60 + sin(w1_x) * 6.0 + cos(w1_x * 0.45 + 1.2) * 3.5;
-    if (py > wave1_y) {
-        let depth = clamp((py - wave1_y) / (th - wave1_y + 0.1), 0.0, 1.0);
-        let w1_col = mix(wave_blue * 0.65, sumi_ink1, depth * 0.55);
-        let blend1 = smoothstep(wave1_y, wave1_y + 2.5, py);
-        base_col = mix(base_col, w1_col, blend1 * 0.85);
+// ─────────────────────────────────────────────────────────────────────────────
+// Cheap value-noise / fbm — gives us ink bleed, paper fibre and dry-brush breakup
+// ─────────────────────────────────────────────────────────────────────────────
+fn hash21(p: vec2<f32>) -> f32 {
+    var q = fract(p * vec2<f32>(123.34, 456.21));
+    q = q + dot(q, q + vec2<f32>(45.32, 45.32));
+    return fract(q.x * q.y);
+}
+
+fn vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash21(i);
+    let b = hash21(i + vec2<f32>(1.0, 0.0));
+    let c = hash21(i + vec2<f32>(0.0, 1.0));
+    let d = hash21(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+fn fbm(p: vec2<f32>) -> f32 {
+    var v = 0.0;
+    var a = 0.5;
+    var q = p;
+    for (var i = 0; i < 3; i = i + 1) {
+        v = v + a * vnoise(q);
+        q = q * 2.03 + vec2<f32>(17.0, 9.0);
+        a = a * 0.5;
+    }
+    return v; // ~0.0 .. 0.875
+}
+
+// Hokusai-style asymmetric swell: long gentle back, steep curling front.
+// returns (height 0..amp, front-mask 0..1 where the crest is breaking)
+fn swell(x: f32, t: f32, period: f32, amp: f32, speed: f32, phase0: f32) -> vec2<f32> {
+    let s = fract(x / period - t * speed + phase0);
+    let rise = pow(s, 2.2);
+    let fallen = 1.0 - smoothstep(0.86, 0.99, s);
+    let h = rise * fallen * amp;
+    let front = smoothstep(0.68, 0.88, s) * fallen;
+    return vec2<f32>(h, front);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Title bar background: sumi-e ink wash + Great Wave off Kanagawa
+// ─────────────────────────────────────────────────────────────────────────────
+fn kanagawa_ink_wave(px: f32, py: f32, t: f32, total_w: f32, th: f32) -> vec4<f32> {
+    // Kanagawa (rebelot) palette
+    let sumi0       = hex(22.0, 22.0, 29.0);     // #16161D
+    let sumi3       = hex(31.0, 31.0, 40.0);     // #1F1F28
+    let sumi4       = hex(42.0, 42.0, 55.0);     // #2A2A37
+    let wave1       = hex(34.0, 50.0, 73.0);     // #223249 waveBlue1 (indigo)
+    let wave2       = hex(45.0, 79.0, 103.0);    // #2D4F67 waveBlue2 (prussian)
+    let aqua1       = hex(106.0, 149.0, 137.0);  // #6A9589 waveAqua1
+    let aqua2       = hex(122.0, 168.0, 159.0);  // #7AA89F waveAqua2
+    let spring_blue = hex(127.0, 180.0, 202.0);  // #7FB4CA springBlue
+    let old_white   = hex(200.0, 192.0, 147.0);  // #C8C093 oldWhite
+    let fuji_white  = hex(220.0, 215.0, 186.0);  // #DCD7BA fujiWhite
+
+    let p = vec2<f32>(px, py);
+
+    // ── Paper & wash ────────────────────────────────────────────────────────
+    // dark sumi stone gradient, mottled by slow ink-wash clouds
+    let wash = fbm(p * vec2<f32>(0.010, 0.040) + vec2<f32>(t * 0.015, 0.0));
+    var col = mix(sumi0, sumi3, smoothstep(0.0, th, py) * 0.7);
+    col = mix(col, wave1, wash * 0.38);
+    // washi fibre grain (static, very subtle)
+    col = col * (0.93 + 0.14 * hash21(floor(p)));
+
+    // ── Crescent moon (Lunula) bleeding through the wash ────────────────────
+    let moon_c = vec2<f32>(max(total_w * 0.22, 170.0), 15.0);
+    let jitter = (fbm(p * 0.35) - 0.4) * 2.0;
+    let d_outer = length(p - moon_c) + jitter;
+    let d_inner = length(p - (moon_c + vec2<f32>(3.6, -2.2))) + jitter;
+    let disc  = (1.0 - smoothstep(7.0, 8.5, d_outer));
+    let cut   = (1.0 - smoothstep(6.0, 7.4, d_inner));
+    let moon  = clamp(disc - cut, 0.0, 1.0);
+    let halo  = exp(-max(d_outer - 8.0, 0.0) * 0.12) * 0.10;
+    col = mix(col, wave2, halo);
+    col = mix(col, mix(old_white, fuji_white, 0.35), moon * 0.62);
+
+    // ── Far swell: misty indigo wash behind the great wave ──────────────────
+    let far = swell(px, t, 760.0, 9.0, 0.010, 0.62);
+    let far_y = th * 0.60 - far.x - (fbm(vec2<f32>(px * 0.03, 2.0)) - 0.4) * 3.0;
+    let far_dc = py - far_y;
+    if (far_dc < 0.0) {
+        col = mix(col, wave1, exp(far_dc / 4.0) * 0.30);
+    } else {
+        let far_depth = clamp(far_dc / 22.0, 0.0, 1.0);
+        let far_col = mix(wave1 * 1.25, sumi3, far_depth * 0.7);
+        col = mix(col, far_col, smoothstep(0.0, 3.5, far_dc) * 0.80);
     }
 
-    // Layer 2: Main dynamic curling wave (Badan ombak Hokusai)
-    let w2_x = px * 0.012 - time * 0.45;
-    let s2 = sin(w2_x);
-    // Asymmetric peaked wave shape (sharper curling crests, wider calm troughs)
-    let peak2 = pow(max(0.0, s2 * 0.5 + 0.5), 2.2) * 15.0;
-    let wave2_y = th * 0.52 - peak2 + cos(w2_x * 1.6 + time * 0.15) * 3.0;
-    if (py > wave2_y) {
-        let depth = clamp((py - wave2_y) / (th - wave2_y + 0.1), 0.0, 1.0);
-        let w2_col = mix(wave_aqua * 0.80, wave_blue, depth * 0.75);
-        let blend2 = smoothstep(wave2_y, wave2_y + 2.5, py);
-        base_col = mix(base_col, w2_col, blend2 * 0.92);
+    // ── The Great Wave ──────────────────────────────────────────────────────
+    let sw = swell(px, t, 520.0, 21.0, 0.020, 0.30);
+    let rough = (fbm(vec2<f32>(px * 0.05, t * 0.10 + 3.7)) - 0.44) * 3.2;
+    let crest_y = th * 0.66 - sw.x - sin(px * 0.07 - t * 0.9) * 1.1 - rough;
+    let front = sw.y;
+    let dc = py - crest_y;
 
-        // Layer 3: Foam crest & fine spray at the peak
-        let foam_dist = abs(py - wave2_y);
-        if (foam_dist < 2.5) {
-            let foam_mix = smoothstep(2.5, 0.1, foam_dist);
-            let foam_col = mix(spring_blue, fuji_white, smoothstep(2.0, 0.0, foam_dist));
-            base_col = mix(base_col, foam_col, foam_mix * 0.88);
-        }
+    if (dc < 0.0) {
+        // ink bleed just above the brush edge
+        col = mix(col, wave2, exp(dc / 5.0) * (0.20 + 0.20 * wash));
+
+        // spray: sparse fujiWhite droplets flung from the breaking front,
+        // travelling with the swell (period * speed = 10.4 px/s)
+        let sp = vec2<f32>(px - t * 10.4, py) / 2.6;
+        let r = hash21(floor(sp));
+        let cell = fract(sp) - vec2<f32>(0.5, 0.5);
+        let dist = length(cell) * 2.6;
+        let drop_on = step(0.90, r) * (1.0 - smoothstep(0.35, 1.0, dist));
+        let spray_mask = front * smoothstep(-14.0, -1.5, dc);
+        col = mix(col, fuji_white, drop_on * spray_mask * 0.85);
+    } else {
+        let depth = clamp(dc / 22.0, 0.0, 1.0);
+
+        // Hokusai prussian gradient: pale at the crest, deep indigo below
+        var body = mix(wave2, spring_blue, 0.28);
+        body = mix(body, wave1, smoothstep(0.0, 0.85, depth));
+        body = mix(body, sumi0, smoothstep(0.55, 1.0, depth) * 0.55);
+
+        // woodblock water-grain streaks following the crest line
+        let flow = fbm(vec2<f32>(px * 0.03, dc * 0.20)) * 6.0;
+        let streak = smoothstep(0.88, 1.0, sin(dc * 0.85 + flow - t * 0.4));
+        body = mix(body, aqua2, streak * 0.20 * (1.0 - depth * 0.6));
+
+        // ink pooling / mottling inside the body
+        body = body * (0.80 + 0.40 * fbm(vec2<f32>(px * 0.02, py * 0.08) + vec2<f32>(5.0, 5.0)));
+
+        col = mix(col, body, smoothstep(0.0, 1.2, dc) * 0.97);
+
+        // sumi contour — brush pressure swells on the curling front
+        let lw = 1.0 + 0.9 * front + 0.6 * vnoise(vec2<f32>(px * 0.2, 1.0));
+        let line = (1.0 - smoothstep(lw * 0.4, lw, abs(dc - lw * 0.3)));
+        col = mix(col, sumi0 * 0.55, line * 0.92);
+
+        // dry-brush foam under the contour (washi white, broken by noise)
+        let fd = dc - lw * 0.8;
+        let foam_band = (1.0 - smoothstep(0.0, 2.5 + 5.0 * front, fd)) * step(0.0, fd);
+        let bn = fbm(vec2<f32>(px * 0.22, py * 0.60 + t * 0.15));
+        let foam_a = foam_band * smoothstep(0.38, 0.62, bn + front * 0.25);
+        col = mix(col, mix(old_white, fuji_white, bn), foam_a * 0.90);
     }
 
-    // Layer 4: Foreground gentle water ripple (Aksen riak di dasar titlebar)
-    let w3_x = px * 0.02 + time * 0.7;
-    let wave3_y = th * 0.84 + sin(w3_x) * 2.5 + cos(w3_x * 0.6 - time * 0.3) * 1.5;
-    if (py > wave3_y) {
-        let blend3 = smoothstep(wave3_y, wave3_y + 1.5, py);
-        base_col = mix(base_col, sumi_ink1 * 0.85, blend3 * 0.40);
-        if (abs(py - wave3_y) < 1.0) {
-            base_col = mix(base_col, spring_blue * 0.7, 0.30);
-        }
-    }
+    // ── Foreground ripple hairline, broken like a dry brush stroke ──────────
+    let r_y = th * 0.90 + sin(px * 0.025 + t * 0.6) * 1.4;
+    let r_line = (1.0 - smoothstep(0.2, 0.9, abs(py - r_y)));
+    let r_break = smoothstep(0.35, 0.60, vnoise(vec2<f32>(px * 0.06, t * 0.05)));
+    col = mix(col, aqua1, r_line * r_break * 0.22);
 
-    return vec4<f32>(base_col, 0.98);
+    // ── Ink pooling at the bottom edge so it melts into the tab bar ─────────
+    col = mix(col, sumi0, smoothstep(th - 7.0, th, py) * 0.55);
+
+    // ── Heavier ink behind the window controls and slight edge vignette ─────
+    let left = smoothstep(0.0, 150.0, px);
+    col = mix(sumi0, col, 0.35 + 0.65 * left);
+    let right = smoothstep(0.0, 40.0, total_w - px);
+    col = mix(sumi0, col, 0.70 + 0.30 * right);
+
+    return vec4<f32>(col, 0.98);
+}
+
+fn paint_dot(col: vec4<f32>, px: f32, py: f32, cx: f32, cy: f32, r: f32, c: vec3<f32>) -> vec4<f32> {
+    let d = length(vec2<f32>(px - cx, py - cy));
+    let a = (1.0 - smoothstep(r - 0.7, r + 0.7, d));
+    return vec4<f32>(mix(col.rgb, c, a), max(col.a, a));
 }
 
 @fragment
@@ -118,80 +245,70 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let px = uv.x * uniforms.window_size.x;
     let py = uv.y * uniforms.window_size.y;
 
+    let border_col = vec4<f32>(hex(54.0, 54.0, 70.0), 0.85); // sumiInk5
+
     if (py < titlebar_h) {
-        // Calculate the Kanagawa Ink Wave in the background (lowest z-index)
+        // The offscreen target is cleared to 0 and drawn with ALPHA_BLENDING, so it
+        // holds premultiplied colour: composite it OVER the ink wave accordingly.
         let wave = kanagawa_ink_wave(px, py, uniforms.time, uniforms.window_size.x, titlebar_h);
+        col = vec4<f32>(col.rgb + wave.rgb * (1.0 - col.a), max(wave.a, col.a));
 
-        // Blend offscreen content (semi-transparent frosted pills & crisp text) OVER the wave
-        col = vec4<f32>(mix(wave.rgb, col.rgb, col.a), max(wave.a, col.a));
-
-        // Window controls (Red, Yellow, Green circles on top-left of titlebar with Kanagawa pigments)
-        let radius = 6.0;
+        // Window controls — muted mineral pigments at rest, vivid on hover
         let center_y = 24.0;
+        let radius = 6.0;
+        let hb = uniforms.hover_button;
 
-        // Dot 1: Red (Close / Quit) - samuraiRed #E82424
-        let d1 = length(vec2<f32>(px - 30.0, py - center_y));
-        if (d1 < radius) {
-            col = vec4<f32>(0.91, 0.25, 0.25, 1.0);
-            if (uniforms.hover_button > 0.5 && uniforms.hover_button < 1.5) {
-                // macOS-style 'X' inside Close button
-                let lx = abs(px - 30.0);
-                let ly = abs(py - center_y);
-                if (abs(lx - ly) < 0.9 && max(lx, ly) < 3.2) {
-                    col = vec4<f32>(0.20, 0.05, 0.06, 1.0);
-                }
-            }
-        } else if (d1 < radius + 2.5 && uniforms.hover_button > 0.5 && uniforms.hover_button < 1.5) {
-            // Subtle glow ring around Close button
-            let glow = smoothstep(radius + 2.5, radius, d1);
-            col = mix(col, vec4<f32>(0.91, 0.25, 0.25, 0.6), glow * 0.7);
+        // Close: autumnRed #C34043 -> samuraiRed #E82424
+        var c_close = hex(195.0, 64.0, 67.0);
+        if (hb > 0.5 && hb < 1.5) { c_close = hex(232.0, 36.0, 36.0); }
+        // Minimize: autumnYellow #DCA561 -> carpYellow #E6C384
+        var c_min = hex(220.0, 165.0, 97.0);
+        if (hb > 1.5 && hb < 2.5) { c_min = hex(230.0, 195.0, 132.0); }
+        // Maximize: autumnGreen #76946A -> springGreen #98BB6C
+        var c_max = hex(118.0, 148.0, 106.0);
+        if (hb > 2.5 && hb < 3.5) { c_max = hex(152.0, 187.0, 108.0); }
+
+        let glyph = hex(22.0, 22.0, 29.0); // sumiInk0
+
+        // soft ink-bleed glow behind the hovered button
+        if (hb > 0.5) {
+            var hx = 30.0;
+            var hc = c_close;
+            if (hb > 1.5 && hb < 2.5) { hx = 52.0; hc = c_min; }
+            if (hb > 2.5) { hx = 74.0; hc = c_max; }
+            let hd = length(vec2<f32>(px - hx, py - center_y));
+            col = vec4<f32>(mix(col.rgb, hc, (1.0 - smoothstep(radius, radius + 5.0, hd)) * 0.35), col.a);
         }
 
-        // Dot 2: Yellow (Minimize) - boatYellow2 #E6C384
-        let d2 = length(vec2<f32>(px - 52.0, py - center_y));
-        if (d2 < radius) {
-            col = vec4<f32>(0.90, 0.76, 0.52, 1.0);
-            if (uniforms.hover_button > 1.5 && uniforms.hover_button < 2.5) {
-                // '-' inside Minimize button
-                if (abs(py - center_y) < 0.9 && abs(px - 52.0) < 3.2) {
-                    col = vec4<f32>(0.25, 0.18, 0.08, 1.0);
-                }
-            }
-        } else if (d2 < radius + 2.5 && uniforms.hover_button > 1.5 && uniforms.hover_button < 2.5) {
-            // Subtle glow ring around Minimize button
-            let glow = smoothstep(radius + 2.5, radius, d2);
-            col = mix(col, vec4<f32>(0.90, 0.76, 0.52, 0.6), glow * 0.7);
-        }
+        col = paint_dot(col, px, py, 30.0, center_y, radius, c_close);
+        col = paint_dot(col, px, py, 52.0, center_y, radius, c_min);
+        col = paint_dot(col, px, py, 74.0, center_y, radius, c_max);
 
-        // Dot 3: Green (Maximize) - springGreen #98BB6C
-        let d3 = length(vec2<f32>(px - 74.0, py - center_y));
-        if (d3 < radius) {
-            col = vec4<f32>(0.60, 0.73, 0.42, 1.0);
-            if (uniforms.hover_button > 2.5 && uniforms.hover_button < 3.5) {
-                // '+' inside Maximize button
-                let dx = abs(px - 74.0);
-                let dy = abs(py - center_y);
-                if ((dx < 0.9 && dy < 3.2) || (dy < 0.9 && dx < 3.2)) {
-                    col = vec4<f32>(0.08, 0.20, 0.08, 1.0);
-                }
-            }
-        } else if (d3 < radius + 2.5 && uniforms.hover_button > 2.5 && uniforms.hover_button < 3.5) {
-            // Subtle glow ring around Maximize button
-            let glow = smoothstep(radius + 2.5, radius, d3);
-            col = mix(col, vec4<f32>(0.60, 0.73, 0.42, 0.6), glow * 0.7);
+        // glyphs on hover
+        if (hb > 0.5 && hb < 1.5) {
+            let lx = abs(px - 30.0);
+            let ly = abs(py - center_y);
+            if (abs(lx - ly) < 0.9 && max(lx, ly) < 3.2) { col = vec4<f32>(glyph, 1.0); }
+        }
+        if (hb > 1.5 && hb < 2.5) {
+            if (abs(py - center_y) < 0.9 && abs(px - 52.0) < 3.2) { col = vec4<f32>(glyph, 1.0); }
+        }
+        if (hb > 2.5 && hb < 3.5) {
+            let dx = abs(px - 74.0);
+            let dy = abs(py - center_y);
+            if ((dx < 0.9 && dy < 3.2) || (dy < 0.9 && dx < 3.2)) { col = vec4<f32>(glyph, 1.0); }
         }
     }
 
     // Titlebar bottom dividing line
-    let sep_dist = abs(py - titlebar_h);
-    if (sep_dist < 1.0) {
-        col = mix(col, vec4<f32>(0.21, 0.21, 0.27, 0.85), 0.75); // sumiInk5
+    if (abs(py - titlebar_h) < 1.0) {
+        col = mix(col, border_col, 0.75);
     }
 
     // Outer border outline around the entire box
     let border_px = min(min(px, uniforms.window_size.x - px), min(py, uniforms.window_size.y - py));
     if (border_px < 1.0) {
-        col = mix(col, vec4<f32>(0.21, 0.21, 0.27, 0.85), 0.75); // sumiInk5
+        col = mix(col, border_col, 0.75);
     }
 
     return col;

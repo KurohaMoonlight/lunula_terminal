@@ -91,7 +91,7 @@ impl Default for CursorConfig {
         Self {
             shape: "block".to_string(),
             blinking: true,
-            color: [180, 190, 254], // Catppuccin Lavender (#b4befe)
+            color: [127, 180, 202], // Kanagawa springBlue (#7fb4ca)
             trail: true,
             trail_stiffness: 550.0,
             trail_damping: 28.0,
@@ -141,7 +141,7 @@ pub struct ColorsConfig {
 impl Default for ColorsConfig {
     fn default() -> Self {
         Self {
-            selection: [88, 91, 112], // Catppuccin Mocha Surface 2 (#585b70)
+            selection: [45, 79, 103], // Kanagawa waveBlue2 (#2d4f67)
         }
     }
 }
