@@ -184,7 +184,7 @@ impl Perform for TerminalGrid {
             for extra in 1..w {
                 if self.cursor_x + extra < self.cols {
                     self.cells[self.cursor_y][self.cursor_x + extra] = Cell {
-                        c: ' ',
+                        c: '\0',
                         style: self.current_style,
                         hyperlink_idx: self.current_hyperlink_idx,
                     };
@@ -258,6 +258,42 @@ impl Perform for TerminalGrid {
                 if let Ok(title) = std::str::from_utf8(params[1]) {
                     self.title = title.to_string();
                     self.dirty = true;
+                }
+            }
+        } else if params[0] == b"7" {
+            // OSC 7: Current Working Directory, e.g. "file://localhost/C:/path" or "file:///C:/path"
+            if params.len() >= 2 {
+                if let Ok(raw) = std::str::from_utf8(params[1]) {
+                    let path_str = raw.strip_prefix("file://").unwrap_or(raw);
+                    let path_str = path_str.strip_prefix("localhost").unwrap_or(path_str);
+                    let path_str = if path_str.len() >= 3
+                        && path_str.starts_with('/')
+                        && path_str.as_bytes()[2] == b':'
+                    {
+                        &path_str[1..]
+                    } else {
+                        path_str
+                    };
+                    let pb = std::path::PathBuf::from(path_str);
+                    if pb.exists() {
+                        self.cwd = Some(pb);
+                    }
+                }
+            }
+        } else if params[0] == b"9" || params[0] == b"9;9" {
+            // OSC 9;9: ConEmu / Windows Terminal CWD sequence: OSC 9 ; 9 ; "path" ST
+            let raw_path = if params[0] == b"9;9" && params.len() >= 2 {
+                std::str::from_utf8(params[1]).ok()
+            } else if params.len() >= 3 && params[1] == b"9" {
+                std::str::from_utf8(params[2]).ok()
+            } else {
+                None
+            };
+            if let Some(raw) = raw_path {
+                let trimmed = raw.trim().trim_matches('"');
+                let pb = std::path::PathBuf::from(trimmed);
+                if pb.exists() {
+                    self.cwd = Some(pb);
                 }
             }
         } else if params[0] == b"8" {

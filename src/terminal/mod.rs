@@ -23,6 +23,7 @@ pub struct TerminalGrid {
     pub cursor_visible: bool,
     pub cursor_config: CursorConfig,
     pub title: String,
+    pub cwd: Option<std::path::PathBuf>,
     pub app_cursor_keys: bool,
     pub cells: Vec<Vec<Cell>>,
     pub current_style: CellStyle,
@@ -65,6 +66,7 @@ impl TerminalGrid {
             cursor_visible: true,
             cursor_config: CursorConfig::default(),
             title: "Lunula Terminal".to_string(),
+            cwd: None,
             app_cursor_keys: false,
             cells,
             current_style: CellStyle::default(),
@@ -650,5 +652,43 @@ mod tests {
             plain_grid.get_hyperlink_at(10, 0),
             Some("https://example.com".to_string())
         );
+    }
+
+    #[test]
+    fn test_wide_characters_no_duplicate_spaces() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes("中文".as_bytes());
+        assert_eq!(grid.cells[0][0].c, '中');
+        assert_eq!(grid.cells[0][1].c, '\0');
+        assert_eq!(grid.cells[0][2].c, '文');
+        assert_eq!(grid.cells[0][3].c, '\0');
+
+        let (spans, _) = grid.render_spans_and_backgrounds(10.0, 20.0, 0.0, 0.0);
+        assert_eq!(spans[0].0, "中文");
+    }
+
+    #[test]
+    fn test_osc_cwd_handling() {
+        let mut grid = TerminalGrid::new(20, 5);
+        let current_dir = std::env::current_dir().unwrap();
+        let path_str = current_dir.to_str().unwrap().replace('\\', "/");
+        let osc7 = format!("\x1b]7;file://localhost/{}\x07", path_str);
+        grid.advance_bytes(osc7.as_bytes());
+        assert_eq!(grid.cwd, Some(current_dir.clone()));
+
+        let mut grid2 = TerminalGrid::new(20, 5);
+        let osc9 = format!("\x1b]9;9;\"{}\"\x07", current_dir.display());
+        grid2.advance_bytes(osc9.as_bytes());
+        assert_eq!(grid2.cwd, Some(current_dir));
+    }
+
+    #[test]
+    fn test_app_cursor_keys_mode() {
+        let mut grid = TerminalGrid::new(20, 5);
+        assert!(!grid.app_cursor_keys);
+        grid.advance_bytes(b"\x1b[?1h");
+        assert!(grid.app_cursor_keys);
+        grid.advance_bytes(b"\x1b[?1l");
+        assert!(!grid.app_cursor_keys);
     }
 }

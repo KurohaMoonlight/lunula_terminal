@@ -17,6 +17,10 @@ impl GpuState {
 
         let content_w = self.wobble.content_size[0] as f32;
         let content_h = self.wobble.content_size[1] as f32;
+        let content_mouse = self
+            .wobble
+            .screen_to_content_pos(self.mouse_pos[0], self.mouse_pos[1])
+            .unwrap_or([-1000.0, -1000.0]);
         let cell_w = self.text_engine.cell_width;
         let cell_h = self.text_engine.cell_height;
 
@@ -29,7 +33,7 @@ impl GpuState {
         let visible_leaves = active_tab.root.all_leaves();
 
         let mut high_fps_animating = self.wobble.is_dragging || wobble_active;
-        let mut needs_blink_timer = false;
+        let mut needs_blink_timer = true; // Animate Kanagawa ink wave continuously
 
         for &id in &visible_leaves {
             if let Some(pane) = self.tab_manager.panes.get_mut(&id) {
@@ -66,7 +70,7 @@ impl GpuState {
             let clock_spans = vec![(
                 time_str,
                 terminal::CellStyle::new()
-                    .with_fg(terminal::ColorRgb { r: 186, g: 194, b: 222 })
+                    .with_fg(terminal::ColorRgb { r: 200, g: 192, b: 147 }) // oldWhite
                     .with_bold(true),
             )];
             self.text_engine
@@ -79,7 +83,7 @@ impl GpuState {
             let gear_spans = vec![(
                 "⚙".to_string(),
                 terminal::CellStyle::new()
-                    .with_fg(terminal::ColorRgb { r: 137, g: 220, b: 235 })
+                    .with_fg(terminal::ColorRgb { r: 122, g: 168, b: 159 }) // waveAqua2
                     .with_bold(true),
             )];
             self.text_engine
@@ -89,7 +93,7 @@ impl GpuState {
             let help_spans = vec![(
                 "?".to_string(),
                 terminal::CellStyle::new()
-                    .with_fg(terminal::ColorRgb { r: 249, g: 226, b: 175 })
+                    .with_fg(terminal::ColorRgb { r: 230, g: 195, b: 132 }) // boatYellow2
                     .with_bold(true),
             )];
             self.text_engine
@@ -104,18 +108,18 @@ impl GpuState {
                 (
                     format!("{} ", self.cached_username),
                     terminal::CellStyle::new()
-                        .with_fg(terminal::ColorRgb { r: 137, g: 180, b: 250 })
+                        .with_fg(terminal::ColorRgb { r: 220, g: 215, b: 186 }) // fujiWhite
                         .with_bold(true),
                 ),
                 (
                     ":".to_string(),
                     terminal::CellStyle::new()
-                        .with_fg(terminal::ColorRgb { r: 108, g: 112, b: 134 }),
+                        .with_fg(terminal::ColorRgb { r: 114, g: 113, b: 105 }), // fujiGray
                 ),
                 (
                     format!("  {}", self.cached_git_branch),
                     terminal::CellStyle::new()
-                        .with_fg(terminal::ColorRgb { r: 166, g: 227, b: 161 })
+                        .with_fg(terminal::ColorRgb { r: 152, g: 187, b: 108 }) // springGreen
                         .with_bold(true),
                 ),
             ];
@@ -125,15 +129,8 @@ impl GpuState {
             self.bar_center_dirty = false;
         }
 
-        // Titlebar Background (0..42px)
-        bg_rects.push(terminal::BgRect {
-            x: 0.0,
-            y: 0.0,
-            w: content_w,
-            h: 42.0,
-            color: terminal::ColorRgb { r: 24, g: 24, b: 37 },
-            alpha: 0.98,
-        });
+        // Kanagawa Wave titlebar background is rendered at the lowest z-index in wobble.wgsl.
+        // We render the floating frosted sumi glass pills and buttons over it:
 
         let center_pill_w = (self.bar_center_width + 28.0).clamp(120.0, 420.0);
         let center_pill_x = ((content_w - center_pill_w) * 0.5).round();
@@ -141,19 +138,19 @@ impl GpuState {
         if show_center_pill {
             bg_rects.push(terminal::BgRect {
                 x: center_pill_x,
-                y: 7.0,
+                y: 10.0,
                 w: center_pill_w,
                 h: 28.0,
-                color: terminal::ColorRgb { r: 30, g: 30, b: 46 },
-                alpha: 0.85,
+                color: terminal::ColorRgb { r: 31, g: 31, b: 40 }, // sumiInk3
+                alpha: 0.65, // Frosted glass lets ink wave subtly shine through
             });
             bg_rects.push(terminal::BgRect {
                 x: center_pill_x,
-                y: 34.0,
+                y: 37.0,
                 w: center_pill_w,
                 h: 1.0,
-                color: terminal::ColorRgb { r: 69, g: 71, b: 90 },
-                alpha: 0.60,
+                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // sumiInk5
+                alpha: 0.50,
             });
         }
 
@@ -161,49 +158,57 @@ impl GpuState {
         let clock_x = (content_w - 82.0 - clock_w).round();
         bg_rects.push(terminal::BgRect {
             x: clock_x,
-            y: 7.0,
+            y: 10.0,
             w: clock_w,
             h: 28.0,
-            color: terminal::ColorRgb { r: 30, g: 30, b: 46 },
-            alpha: 0.75,
+            color: terminal::ColorRgb { r: 31, g: 31, b: 40 }, // sumiInk3
+            alpha: 0.65,
         });
 
-        // Gear Icon (purely decorative ornament for now)
+        let is_gear_hover = content_mouse[0] >= content_w - 74.0
+            && content_mouse[0] <= content_w - 42.0
+            && content_mouse[1] >= 9.0
+            && content_mouse[1] <= 39.0;
         bg_rects.push(terminal::BgRect {
             x: content_w - 74.0,
-            y: 7.0,
+            y: 10.0,
             w: 32.0,
             h: 28.0,
-            color: terminal::ColorRgb { r: 30, g: 30, b: 46 },
-            alpha: 0.50,
+            color: if is_gear_hover {
+                terminal::ColorRgb { r: 45, g: 79, b: 103 } // waveBlue2
+            } else {
+                terminal::ColorRgb { r: 31, g: 31, b: 40 } // sumiInk3
+            },
+            alpha: if is_gear_hover { 0.90 } else { 0.55 },
         });
 
-        let is_help_hover = self.mouse_pos[0] >= content_w - 38.0
-            && self.mouse_pos[0] <= content_w - 6.0
-            && self.mouse_pos[1] >= 6.0
-            && self.mouse_pos[1] <= 36.0;
+        let is_help_hover = content_mouse[0] >= content_w - 38.0
+            && content_mouse[0] <= content_w - 6.0
+            && content_mouse[1] >= 9.0
+            && content_mouse[1] <= 39.0;
         bg_rects.push(terminal::BgRect {
             x: content_w - 38.0,
-            y: 7.0,
+            y: 10.0,
             w: 32.0,
             h: 28.0,
             color: if is_help_hover {
-                terminal::ColorRgb { r: 49, g: 50, b: 68 }
+                terminal::ColorRgb { r: 45, g: 79, b: 103 } // waveBlue2
             } else {
-                terminal::ColorRgb { r: 30, g: 30, b: 46 }
+                terminal::ColorRgb { r: 31, g: 31, b: 40 } // sumiInk3
             },
-            alpha: if is_help_hover { 0.95 } else { 0.70 },
+            alpha: if is_help_hover { 0.90 } else { 0.55 },
         });
 
         // 4c. Tab Bar Background & Tabs
+        let titlebar_h = 48.0;
         if tab_bar_visible {
-            let tab_bar_y = 42.0;
+            let tab_bar_y = titlebar_h;
             bg_rects.push(terminal::BgRect {
                 x: 0.0,
                 y: tab_bar_y,
                 w: content_w,
                 h: tab_bar_h,
-                color: terminal::ColorRgb { r: 24, g: 24, b: 37 },
+                color: terminal::ColorRgb { r: 22, g: 22, b: 29 }, // sumiInk0
                 alpha: 0.95,
             });
             bg_rects.push(terminal::BgRect {
@@ -211,8 +216,8 @@ impl GpuState {
                 y: tab_bar_y + tab_bar_h - 1.0,
                 w: content_w,
                 h: 1.0,
-                color: terminal::ColorRgb { r: 69, g: 71, b: 90 },
-                alpha: 0.8,
+                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // sumiInk5
+                alpha: 0.70,
             });
 
             let mut pill_x = 10.0;
@@ -220,9 +225,9 @@ impl GpuState {
             for (idx, _t) in self.tab_manager.tabs.iter().enumerate() {
                 let is_active = idx == self.tab_manager.active_tab_index;
                 let bg_col = if is_active {
-                    terminal::ColorRgb { r: 49, g: 50, b: 68 }
+                    terminal::ColorRgb { r: 45, g: 79, b: 103 } // waveBlue2
                 } else {
-                    terminal::ColorRgb { r: 30, g: 30, b: 46 }
+                    terminal::ColorRgb { r: 42, g: 42, b: 55 } // sumiInk4
                 };
                 bg_rects.push(terminal::BgRect {
                     x: pill_x,
@@ -239,30 +244,41 @@ impl GpuState {
                         y: tab_bar_y + tab_bar_h - 3.0,
                         w: pill_w - 8.0,
                         h: 2.0,
-                        color: terminal::ColorRgb { r: 180, g: 190, b: 254 },
+                        color: terminal::ColorRgb { r: 127, g: 180, b: 202 }, // springBlue
                         alpha: 1.0,
                     });
                 }
                 pill_x += pill_w + 6.0;
             }
 
-            let is_plus_hover = self.mouse_pos[0] >= pill_x
-                && self.mouse_pos[0] <= pill_x + 32.0
-                && self.mouse_pos[1] >= tab_bar_y + 4.0
-                && self.mouse_pos[1] <= tab_bar_y + tab_bar_h - 4.0;
+            let is_plus_hover = content_mouse[0] >= pill_x
+                && content_mouse[0] <= pill_x + 32.0
+                && content_mouse[1] >= tab_bar_y + 4.0
+                && content_mouse[1] <= tab_bar_y + tab_bar_h - 4.0;
             bg_rects.push(terminal::BgRect {
                 x: pill_x,
                 y: tab_bar_y + 4.0,
                 w: 32.0,
                 h: tab_bar_h - 8.0,
                 color: if is_plus_hover {
-                    terminal::ColorRgb { r: 49, g: 50, b: 68 }
+                    terminal::ColorRgb { r: 45, g: 79, b: 103 } // waveBlue2
                 } else {
-                    terminal::ColorRgb { r: 30, g: 30, b: 46 }
+                    terminal::ColorRgb { r: 42, g: 42, b: 55 } // sumiInk4
                 },
                 alpha: if is_plus_hover { 0.90 } else { 0.70 },
             });
         }
+
+        // Terminal Panes Body Background (sumiInk3 #1F1F28)
+        let body_y = if tab_bar_visible { titlebar_h + tab_bar_h } else { titlebar_h };
+        bg_rects.push(terminal::BgRect {
+            x: 0.0,
+            y: body_y,
+            w: content_w,
+            h: (content_h - body_y).max(0.0),
+            color: terminal::ColorRgb { r: 31, g: 31, b: 40 }, // sumiInk3
+            alpha: self.config.window.opacity,
+        });
 
         // 4d. Visible Panes Backgrounds (with sub-pixel scroll offset), Dimming, Cursor & Trail
         for &id in &visible_leaves {
@@ -296,10 +312,10 @@ impl GpuState {
                 if visible_leaves.len() > 1 {
                     let btn_x = px + pw - 24.0;
                     let btn_y = py + 4.0;
-                    let is_hovered = self.mouse_pos[0] >= btn_x
-                        && self.mouse_pos[0] <= btn_x + 20.0
-                        && self.mouse_pos[1] >= btn_y
-                        && self.mouse_pos[1] <= btn_y + 20.0;
+                    let is_hovered = content_mouse[0] >= btn_x
+                        && content_mouse[0] <= btn_x + 20.0
+                        && content_mouse[1] >= btn_y
+                        && content_mouse[1] <= btn_y + 20.0;
                     bg_rects.push(terminal::BgRect {
                         x: btn_x,
                         y: btn_y,
@@ -478,10 +494,10 @@ impl GpuState {
 
             let close_x = card_x + card_w - 32.0;
             let close_y = card_y + 8.0;
-            let is_close_hovered = self.mouse_pos[0] >= close_x
-                && self.mouse_pos[0] <= close_x + 24.0
-                && self.mouse_pos[1] >= close_y
-                && self.mouse_pos[1] <= close_y + 24.0;
+            let is_close_hovered = content_mouse[0] >= close_x
+                && content_mouse[0] <= close_x + 24.0
+                && content_mouse[1] >= close_y
+                && content_mouse[1] <= close_y + 24.0;
             bg_rects.push(terminal::BgRect {
                 x: close_x,
                 y: close_y,
@@ -525,10 +541,10 @@ impl GpuState {
                 let scroll_ratio = (self.help_scroll_y / max_scroll).clamp(0.0, 1.0);
                 let thumb_y = track_y + scroll_ratio * (track_h - thumb_h);
 
-                let is_thumb_hovered = self.mouse_pos[0] >= track_x - 6.0
-                    && self.mouse_pos[0] <= track_x + track_w + 6.0
-                    && self.mouse_pos[1] >= thumb_y
-                    && self.mouse_pos[1] <= thumb_y + thumb_h;
+                let is_thumb_hovered = content_mouse[0] >= track_x - 6.0
+                    && content_mouse[0] <= track_x + track_w + 6.0
+                    && content_mouse[1] >= thumb_y
+                    && content_mouse[1] <= thumb_y + thumb_h;
 
                 bg_rects.push(terminal::BgRect {
                     x: track_x
@@ -565,7 +581,7 @@ impl GpuState {
 
         // Prepare Text Areas
         let mut areas = Vec::with_capacity(visible_leaves.len() + 6);
-        let bar_text_top = (7.0 + (28.0 - self.text_engine.line_height) * 0.5).round();
+        let bar_text_top = (10.0 + (28.0 - self.text_engine.line_height) * 0.5).round();
 
         if show_center_pill {
             let center_text_x = (center_pill_x + (center_pill_w - self.bar_center_width) * 0.5).round();
@@ -576,11 +592,11 @@ impl GpuState {
                 scale: 1.0,
                 bounds: glyphon::TextBounds {
                     left: center_pill_x as i32,
-                    top: 7,
+                    top: 9,
                     right: (center_pill_x + center_pill_w) as i32,
-                    bottom: 35,
+                    bottom: 39,
                 },
-                default_color: glyphon::Color::rgb(205, 214, 244),
+                default_color: glyphon::Color::rgb(220, 215, 186), // fujiWhite
                 custom_glyphs: &[],
             });
         }
@@ -594,11 +610,11 @@ impl GpuState {
             scale: 1.0,
             bounds: glyphon::TextBounds {
                 left: clock_x as i32,
-                top: 7,
+                top: 9,
                 right: (clock_x + clock_w) as i32,
-                bottom: 35,
+                bottom: 39,
             },
-            default_color: glyphon::Color::rgb(205, 214, 244),
+            default_color: glyphon::Color::rgb(200, 192, 147), // oldWhite
             custom_glyphs: &[],
         });
 
@@ -612,11 +628,11 @@ impl GpuState {
             scale: 1.0,
             bounds: glyphon::TextBounds {
                 left: gear_x as i32,
-                top: 7,
+                top: 9,
                 right: (gear_x + 32.0) as i32,
-                bottom: 35,
+                bottom: 39,
             },
-            default_color: glyphon::Color::rgb(147, 154, 183),
+            default_color: glyphon::Color::rgb(122, 168, 159), // waveAqua2
             custom_glyphs: &[],
         });
 
@@ -630,16 +646,16 @@ impl GpuState {
             scale: 1.0,
             bounds: glyphon::TextBounds {
                 left: help_x as i32,
-                top: 7,
+                top: 9,
                 right: (help_x + 32.0) as i32,
-                bottom: 35,
+                bottom: 39,
             },
-            default_color: glyphon::Color::rgb(205, 214, 244),
+            default_color: glyphon::Color::rgb(230, 195, 132), // boatYellow2
             custom_glyphs: &[],
         });
 
         if tab_bar_visible {
-            let tab_bar_y = 42.0;
+            let tab_bar_y = 48.0;
             areas.push(glyphon::TextArea {
                 buffer: &self.tab_manager.tab_bar_buffer,
                 left: 0.0,
@@ -651,7 +667,7 @@ impl GpuState {
                     right: content_w as i32,
                     bottom: (tab_bar_y + tab_bar_h) as i32,
                 },
-                default_color: glyphon::Color::rgb(205, 214, 244),
+                default_color: glyphon::Color::rgb(220, 215, 186),
                 custom_glyphs: &[],
             });
         }
@@ -728,10 +744,10 @@ impl GpuState {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.10,
-                            g: 0.10,
-                            b: 0.15,
-                            a: self.config.window.opacity as f64,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 0.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -756,9 +772,9 @@ impl GpuState {
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(if self.is_maximized {
                             wgpu::Color {
-                                r: 0.10,
-                                g: 0.10,
-                                b: 0.15,
+                                r: 0.086,
+                                g: 0.086,
+                                b: 0.114,
                                 a: 1.0,
                             }
                         } else {
@@ -789,8 +805,9 @@ impl GpuState {
             self.next_blink_frame = None;
             self.window.request_redraw();
         } else if needs_blink_timer {
-            // Schedule gentle 30 FPS wakeup for smooth cursor blink instead of spinning Mailbox at 2000+ FPS
-            self.next_blink_frame = Some(now + Duration::from_millis(33));
+            // Schedule smooth 60 FPS animation for Kanagawa ink wave (and cursor blink)
+            let interval = if self.is_focused { 16 } else { 50 };
+            self.next_blink_frame = Some(now + Duration::from_millis(interval));
         } else {
             self.next_blink_frame = None;
         }

@@ -52,9 +52,13 @@ pub fn get_local_time_hm() -> String {
     format!("{:02}:{:02}", st.wHour, st.wMinute)
 }
 
-/// Resolves the active Git branch (or short commit hash) by walking upward from `current_dir`.
-pub fn get_git_branch() -> Option<String> {
-    let mut dir = std::env::current_dir().ok()?;
+/// Resolves the active Git branch (or short commit hash) by walking upward from `start_path`.
+pub fn get_git_branch_for_path(start_path: &Path) -> Option<String> {
+    let mut dir = if start_path.is_file() {
+        start_path.parent()?.to_path_buf()
+    } else {
+        start_path.to_path_buf()
+    };
     loop {
         let git_head = dir.join(".git").join("HEAD");
         if Path::new(&git_head).exists() {
@@ -73,4 +77,10 @@ pub fn get_git_branch() -> Option<String> {
         }
     }
     None
+}
+
+/// Resolves the active Git branch (or short commit hash) by walking upward from `current_dir`.
+pub fn get_git_branch() -> Option<String> {
+    let dir = std::env::current_dir().ok()?;
+    get_git_branch_for_path(&dir)
 }

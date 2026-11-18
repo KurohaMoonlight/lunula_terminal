@@ -151,6 +151,11 @@ impl TerminalGrid {
                     });
                 }
 
+                // Trailing cell of a multi-column character: keep background/decorations, skip glyph character
+                if cell.c == '\0' {
+                    continue;
+                }
+
                 // Text glyph character is 100% pure (no fake cursor characters)
                 let mut ch = cell.c;
                 let glyph_color = eff_style.fg.unwrap_or(ColorRgb { r: 205, g: 214, b: 244 });

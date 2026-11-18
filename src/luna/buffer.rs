@@ -31,7 +31,7 @@ impl TextBuffer {
                     let content = fs::read_to_string(&pb)?;
                     let mut v: Vec<String> = content
                         .lines()
-                        .map(|l| l.trim_end_matches('\r').to_string())
+                        .map(|l| l.trim_end_matches('\r').replace('\t', "    "))
                         .collect();
                     if content.ends_with('\n') {
                         v.push(String::new());

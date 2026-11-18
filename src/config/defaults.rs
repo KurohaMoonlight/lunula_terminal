@@ -30,7 +30,7 @@ return {
         spring_shear = 300.0,
     },
     terminal = {
-        font_family = "JetBrainsMono Nerd Font",
+        font_family = "0xProto Nerd Font Mono",
         font_size = 14.5,
         max_scrollback = 5000,
     },

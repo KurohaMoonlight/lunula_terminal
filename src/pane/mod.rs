@@ -62,7 +62,7 @@ impl TabManager {
 
         let cell_w = text_engine.cell_width;
         let cell_h = text_engine.cell_height;
-        let titlebar_h = 42.0;
+        let titlebar_h = 48.0;
         let tab_bar_h = if config.tabs.show_single_tab {
             config.tabs.height
         } else {
@@ -136,7 +136,7 @@ impl TabManager {
 
         let cell_w = text_engine.cell_width;
         let cell_h = text_engine.cell_height;
-        let titlebar_h = 42.0;
+        let titlebar_h = 48.0;
         let tab_bar_h = if config.tabs.show_single_tab {
             config.tabs.height
         } else {
@@ -309,7 +309,7 @@ impl TabManager {
         text_engine: &mut TextEngine,
         config: &LunulaConfig,
     ) {
-        let titlebar_h = 42.0;
+        let titlebar_h = 48.0;
         let tab_bar_h = if self.tab_bar_visible(config) {
             config.tabs.height
         } else {
@@ -351,21 +351,28 @@ impl TabManager {
             for (idx, t) in self.tabs.iter().enumerate() {
                 let is_active = idx == self.active_tab_index;
                 let fg = if is_active {
-                    ColorRgb { r: 245, g: 245, b: 255 }
+                    ColorRgb { r: 220, g: 215, b: 186 }
                 } else {
-                    ColorRgb { r: 166, g: 173, b: 200 }
+                    ColorRgb { r: 114, g: 113, b: 105 }
                 };
                 let style = CellStyle::new()
                     .with_fg(fg)
                     .with_bold(is_active)
                     .with_dim(!is_active);
                 let display_title = if !t.name.is_empty() { &t.name } else { "pwsh" };
-                spans.push((format!("  {}: {}  ×  ", idx + 1, display_title), style));
+                let mut title = display_title.to_string();
+                if title.chars().count() > 7 {
+                    let mut s: String = title.chars().take(6).collect();
+                    s.push('…');
+                    title = s;
+                }
+                let title_fixed = format!("{:<7}", title);
+                spans.push((format!("  {}: {}  × ", idx + 1, title_fixed), style));
             }
             spans.push((
                 "  +  ".to_string(),
                 CellStyle::new()
-                    .with_fg(ColorRgb { r: 137, g: 220, b: 235 })
+                    .with_fg(ColorRgb { r: 127, g: 180, b: 202 })
                     .with_bold(true),
             ));
             text_engine.shape_buffer(&mut self.tab_bar_buffer, &spans);
@@ -381,7 +388,7 @@ impl TabManager {
         text_engine: &mut TextEngine,
         config: &LunulaConfig,
     ) -> TabBarClickResult {
-        let titlebar_h = 42.0;
+        let titlebar_h = 48.0;
         let tab_bar_h = config.tabs.height;
         if !self.tab_bar_visible(config) || cy < titlebar_h || cy >= titlebar_h + tab_bar_h {
             return TabBarClickResult::None;

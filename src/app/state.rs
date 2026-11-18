@@ -37,6 +37,8 @@ pub struct GpuState {
     pub shift_pressed: bool,
     pub alt_pressed: bool,
     pub dragging: bool,
+    pub mouse_left_down: bool,
+    pub last_drag_cell: Option<(usize, usize)>,
     pub selecting: bool,
     pub help_visible: bool,
     pub help_buffer: glyphon::Buffer,
@@ -220,6 +222,8 @@ impl GpuState {
             shift_pressed: false,
             alt_pressed: false,
             dragging: false,
+            mouse_left_down: false,
+            last_drag_cell: None,
             selecting: false,
             help_visible: false,
             help_buffer,
@@ -413,7 +417,27 @@ impl GpuState {
 
         if now.duration_since(self.last_git_check).as_secs_f32() > 3.0 {
             self.last_git_check = now;
-            let new_branch = get_git_branch().unwrap_or_else(|| "detached".to_string());
+            let active_cwd = self.tab_manager.active_pane().and_then(|p| {
+                if let Some(ref cwd) = p.terminal.cwd {
+                    return Some(cwd.clone());
+                }
+                let title_path = std::path::Path::new(&p.terminal.title);
+                if title_path.is_dir() {
+                    return Some(title_path.to_path_buf());
+                }
+                if let Some((_, rest)) = p.terminal.title.split_once(": ") {
+                    let rest_path = std::path::Path::new(rest.trim());
+                    if rest_path.is_dir() {
+                        return Some(rest_path.to_path_buf());
+                    }
+                }
+                None
+            });
+            let new_branch = active_cwd
+                .as_deref()
+                .and_then(crate::platform::get_git_branch_for_path)
+                .or_else(get_git_branch)
+                .unwrap_or_else(|| "detached".to_string());
             if new_branch != self.cached_git_branch {
                 self.cached_git_branch = new_branch;
                 self.bar_center_dirty = true;

@@ -360,6 +360,12 @@ impl GpuState {
                         pane.pty.write_bytes(b"\x1b[6~");
                     }
                 }
+                Key::Named(NamedKey::Home) if self.shift_pressed => {
+                    pane.terminal.scroll_up_view(usize::MAX);
+                }
+                Key::Named(NamedKey::End) if self.shift_pressed => {
+                    pane.terminal.scroll_to_bottom();
+                }
                 _ => {
                     pane.terminal.scroll_to_bottom();
                     match &key_event.logical_key {
@@ -390,6 +396,8 @@ impl GpuState {
                         Key::Named(NamedKey::ArrowUp) => {
                             if self.ctrl_pressed {
                                 pane.pty.write_bytes(b"\x1b[1;5A");
+                            } else if pane.terminal.app_cursor_keys {
+                                pane.pty.write_bytes(b"\x1bOA");
                             } else {
                                 pane.pty.write_bytes(b"\x1b[A");
                             }
@@ -397,6 +405,8 @@ impl GpuState {
                         Key::Named(NamedKey::ArrowDown) => {
                             if self.ctrl_pressed {
                                 pane.pty.write_bytes(b"\x1b[1;5B");
+                            } else if pane.terminal.app_cursor_keys {
+                                pane.pty.write_bytes(b"\x1bOB");
                             } else {
                                 pane.pty.write_bytes(b"\x1b[B");
                             }
@@ -404,6 +414,8 @@ impl GpuState {
                         Key::Named(NamedKey::ArrowRight) => {
                             if self.ctrl_pressed {
                                 pane.pty.write_bytes(b"\x1b[1;5C");
+                            } else if pane.terminal.app_cursor_keys {
+                                pane.pty.write_bytes(b"\x1bOC");
                             } else {
                                 pane.pty.write_bytes(b"\x1b[C");
                             }
@@ -411,6 +423,8 @@ impl GpuState {
                         Key::Named(NamedKey::ArrowLeft) => {
                             if self.ctrl_pressed {
                                 pane.pty.write_bytes(b"\x1b[1;5D");
+                            } else if pane.terminal.app_cursor_keys {
+                                pane.pty.write_bytes(b"\x1bOD");
                             } else {
                                 pane.pty.write_bytes(b"\x1b[D");
                             }
@@ -418,6 +432,8 @@ impl GpuState {
                         Key::Named(NamedKey::Home) => {
                             if self.ctrl_pressed {
                                 pane.pty.write_bytes(b"\x1b[1;5H");
+                            } else if pane.terminal.app_cursor_keys {
+                                pane.pty.write_bytes(b"\x1bOH");
                             } else {
                                 pane.pty.write_bytes(b"\x1b[H");
                             }
@@ -425,9 +441,47 @@ impl GpuState {
                         Key::Named(NamedKey::End) => {
                             if self.ctrl_pressed {
                                 pane.pty.write_bytes(b"\x1b[1;5F");
+                            } else if pane.terminal.app_cursor_keys {
+                                pane.pty.write_bytes(b"\x1bOF");
                             } else {
                                 pane.pty.write_bytes(b"\x1b[F");
                             }
+                        }
+                        Key::Named(NamedKey::F1) => {
+                            pane.pty.write_bytes(b"\x1bOP");
+                        }
+                        Key::Named(NamedKey::F2) => {
+                            pane.pty.write_bytes(b"\x1bOQ");
+                        }
+                        Key::Named(NamedKey::F3) => {
+                            pane.pty.write_bytes(b"\x1bOR");
+                        }
+                        Key::Named(NamedKey::F4) => {
+                            pane.pty.write_bytes(b"\x1bOS");
+                        }
+                        Key::Named(NamedKey::F5) => {
+                            pane.pty.write_bytes(b"\x1b[15~");
+                        }
+                        Key::Named(NamedKey::F6) => {
+                            pane.pty.write_bytes(b"\x1b[17~");
+                        }
+                        Key::Named(NamedKey::F7) => {
+                            pane.pty.write_bytes(b"\x1b[18~");
+                        }
+                        Key::Named(NamedKey::F8) => {
+                            pane.pty.write_bytes(b"\x1b[19~");
+                        }
+                        Key::Named(NamedKey::F9) => {
+                            pane.pty.write_bytes(b"\x1b[20~");
+                        }
+                        Key::Named(NamedKey::F10) => {
+                            pane.pty.write_bytes(b"\x1b[21~");
+                        }
+                        Key::Named(NamedKey::F11) => {
+                            pane.pty.write_bytes(b"\x1b[23~");
+                        }
+                        Key::Named(NamedKey::F12) => {
+                            pane.pty.write_bytes(b"\x1b[24~");
                         }
                         Key::Named(NamedKey::Delete) => {
                             pane.pty.write_bytes(b"\x1b[3~");

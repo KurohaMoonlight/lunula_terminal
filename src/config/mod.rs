@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(cfg.window.width_percent, 0.62);
         assert!((cfg.window.opacity - 0.95).abs() < 1e-4);
         assert_eq!(cfg.wobble.stiffness, 420.0);
-        assert_eq!(cfg.terminal.font_family, "JetBrainsMono Nerd Font");
+        assert_eq!(cfg.terminal.font_family, "0xProto Nerd Font Mono");
         assert_eq!(cfg.terminal.font_size, 14.5);
         assert_eq!(cfg.cursor.shape, "block");
         assert!(cfg.cursor.trail);

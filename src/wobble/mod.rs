@@ -496,25 +496,27 @@ impl WobbleWindow {
             let v = (my - y0) / self.size[1];
             self.grab_uv = [u, v];
 
-            let titlebar_h = 42.0;
+            let titlebar_h = 48.0;
             if my <= y0 + titlebar_h {
                 let rx = mx - x0;
                 let ry = my - y0;
-                if (rx - 30.0).hypot(ry - 21.0) < 12.0 {
+                if (rx - 30.0).hypot(ry - 24.0) < 12.0 {
                     return WindowControlAction::Close;
                 }
-                if (rx - 52.0).hypot(ry - 21.0) < 12.0 {
+                if (rx - 52.0).hypot(ry - 24.0) < 12.0 {
                     return WindowControlAction::Minimize;
                 }
-                if (rx - 74.0).hypot(ry - 21.0) < 12.0 {
+                if (rx - 74.0).hypot(ry - 24.0) < 12.0 {
                     return WindowControlAction::Maximize;
                 }
 
                 let total_w = self.size[0];
-                if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
+                if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 9.0 && ry <= 39.0 {
                     return WindowControlAction::Help;
                 }
-                // Gear icon is purely decorative ornament for now (no Settings action)
+                if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 9.0 && ry <= 39.0 {
+                    return WindowControlAction::Settings;
+                }
 
                 if !self.is_maximized {
                     self.is_dragging = true;
@@ -528,22 +530,24 @@ impl WobbleWindow {
     pub fn get_hover_button(&self, mx: f32, my: f32) -> f32 {
         let x0 = self.target_pos[0];
         let y0 = self.target_pos[1];
-        let titlebar_h = 42.0;
+        let titlebar_h = 48.0;
         if mx >= x0 && mx <= x0 + self.size[0] && my >= y0 && my <= y0 + titlebar_h {
             let rx = mx - x0;
             let ry = my - y0;
-            if (rx - 30.0).hypot(ry - 21.0) < 12.0 {
+            if (rx - 30.0).hypot(ry - 24.0) < 12.0 {
                 return 1.0;
             }
-            if (rx - 52.0).hypot(ry - 21.0) < 12.0 {
+            if (rx - 52.0).hypot(ry - 24.0) < 12.0 {
                 return 2.0;
             }
-            if (rx - 74.0).hypot(ry - 21.0) < 12.0 {
+            if (rx - 74.0).hypot(ry - 24.0) < 12.0 {
                 return 3.0;
             }
             let total_w = self.size[0];
-            // Gear icon is purely decorative; only Help '?' is an active interactive button
-            if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 6.0 && ry <= 36.0 {
+            if rx >= total_w - 74.0 && rx <= total_w - 42.0 && ry >= 9.0 && ry <= 39.0 {
+                return 4.0;
+            }
+            if rx >= total_w - 38.0 && rx <= total_w - 6.0 && ry >= 9.0 && ry <= 39.0 {
                 return 5.0;
             }
         }
@@ -628,5 +632,32 @@ impl WobbleWindow {
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(index_range, 0, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_wobble_shader_syntax() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::default();
+            if let Ok(adapter) = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+            {
+                if let Ok((device, _)) = adapter
+                    .request_device(&wgpu::DeviceDescriptor::default())
+                    .await
+                {
+                    let _shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("Test Wobble Shader"),
+                        source: wgpu::ShaderSource::Wgsl(
+                            include_str!("../render/shaders/wobble.wgsl").into(),
+                        ),
+                    });
+                }
+            }
+        });
     }
 }

@@ -233,7 +233,7 @@ impl TerminalGrid {
                 if col_start <= col_end {
                     let mut line = String::with_capacity(col_end - col_start + 1);
                     for c in col_start..=col_end {
-                        if c < row.len() {
+                        if c < row.len() && row[c].c != '\0' {
                             line.push(row[c].c);
                         }
                     }

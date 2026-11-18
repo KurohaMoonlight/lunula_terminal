@@ -143,8 +143,21 @@ pub fn render_to<W: Write>(
         _ => (buf.cursor_row.saturating_sub(buf.scroll_row)) + 2,
     };
     let screen_col = match prompt {
-        PromptMode::Search(q) => 10 + q.chars().count(),
-        _ => gutter_w + buf.cursor_col.saturating_sub(buf.scroll_col) + 1,
+        PromptMode::Search(q) => 10 + UnicodeWidthStr::width(q.as_str()),
+        _ => {
+            let line = buf
+                .lines
+                .get(buf.cursor_row)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let visible_chars: String = line
+                .chars()
+                .skip(buf.scroll_col)
+                .take(buf.cursor_col.saturating_sub(buf.scroll_col))
+                .collect();
+            let col_offset = UnicodeWidthStr::width(visible_chars.as_str());
+            gutter_w + col_offset + 1
+        }
     };
 
     write!(out, "\x1b[{};{}H\x1b[?25h", screen_row, screen_col)?;

@@ -156,6 +156,34 @@ impl GpuState {
             }
         }
 
+        if self.mouse_left_down {
+            if let Some([cx, cy]) = self
+                .wobble
+                .screen_to_content_pos(self.mouse_pos[0], self.mouse_pos[1])
+            {
+                if let Some(pane) = self.tab_manager.active_pane_mut() {
+                    if pane.terminal.mouse_reporting && !self.shift_pressed {
+                        let rel_x = cx - pane.rect[0] - pane::PANE_PAD;
+                        let rel_y = cy - pane.rect[1] - pane::PANE_PAD;
+                        if rel_x >= 0.0 && rel_y >= 0.0 {
+                            let col = ((rel_x / self.text_engine.cell_width).max(0.0) as usize)
+                                .min(pane.terminal.cols.saturating_sub(1));
+                            let screen_row =
+                                ((rel_y / self.text_engine.cell_height).max(0.0) as usize)
+                                    .min(pane.terminal.rows.saturating_sub(1));
+                            if self.last_drag_cell != Some((col, screen_row)) {
+                                self.last_drag_cell = Some((col, screen_row));
+                                let seq = format!("\x1b[<32;{};{}M", col + 1, screen_row + 1);
+                                pane.pty.write_bytes(seq.as_bytes());
+                                self.drain_pty();
+                                self.window.request_redraw();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if self.ctrl_pressed {
             if let Some([cx, cy]) = self
                 .wobble
@@ -187,8 +215,8 @@ impl GpuState {
                 .screen_to_content_pos(self.mouse_pos[0], self.mouse_pos[1])
             {
                 if self.tab_manager.tab_bar_visible(&self.config)
-                    && cy >= 42.0
-                    && cy <= 42.0 + self.config.tabs.height
+                    && cy >= 48.0
+                    && cy <= 48.0 + self.config.tabs.height
                 {
                     self.window.set_cursor(winit::window::CursorIcon::Pointer);
                 } else {
@@ -203,6 +231,7 @@ impl GpuState {
 
         match bs {
             ElementState::Pressed => {
+                self.mouse_left_down = true;
                 let action = self
                     .wobble
                     .handle_mouse_click(self.mouse_pos[0], self.mouse_pos[1]);
@@ -217,7 +246,14 @@ impl GpuState {
                         return;
                     }
                     WindowControlAction::Settings => {
-                        // Gear is currently purely decorative
+                        let active_tab = self.tab_manager.active_tab();
+                        let active_pane_id = active_tab.active_pane_id;
+                        if let Some(pane) = self.tab_manager.panes.get_mut(&active_pane_id) {
+                            let cmd = format!("luna \"{}\"\r\n", self.config_path.display());
+                            pane.pty.write_bytes(cmd.as_bytes());
+                            self.drain_pty();
+                            self.window.request_redraw();
+                        }
                         return;
                     }
                     WindowControlAction::Drag => {
@@ -284,8 +320,8 @@ impl GpuState {
                             }
 
                             if self.tab_manager.tab_bar_visible(&self.config)
-                                && cy >= 42.0
-                                && cy < 42.0 + self.config.tabs.height
+                                && cy >= 48.0
+                                && cy < 48.0 + self.config.tabs.height
                             {
                                 match self.tab_manager.handle_tab_bar_click(
                                     cx,
@@ -433,6 +469,8 @@ impl GpuState {
                 }
             }
             ElementState::Released => {
+                self.mouse_left_down = false;
+                self.last_drag_cell = None;
                 self.dragging = false;
                 self.help_dragging_scrollbar = false;
                 self.wobble.handle_mouse_up();
