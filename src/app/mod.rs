@@ -4,9 +4,15 @@ pub mod help_modal;
 pub mod input_keyboard;
 pub mod input_mouse;
 pub mod render;
+pub mod settings_modal;
 pub mod state;
 
 pub use state::GpuState;
+
+pub const HELP_MODAL_WIDTH: f32 = 780.0;
+pub const HELP_MODAL_HEIGHT: f32 = 660.0;
+pub const SETTINGS_MODAL_WIDTH: f32 = 760.0;
+pub const SETTINGS_MODAL_HEIGHT: f32 = 520.0;
 
 use crate::config::LunulaConfig;
 use std::sync::Arc;
@@ -36,11 +42,16 @@ impl ApplicationHandler for LunulaApp {
             };
             let (init_w, init_h) = self.config.window.get_effective_dimensions(mon_w, mon_h);
 
-            let attrs = WindowAttributes::default()
+            let mut attrs = WindowAttributes::default()
                 .with_title(&self.config.window.title)
                 .with_decorations(false)
                 .with_transparent(true)
                 .with_inner_size(PhysicalSize::new(init_w, init_h));
+
+            const ICON_RGBA: &[u8] = include_bytes!("../../assets/icon_32.rgba");
+            if let Ok(icon) = winit::window::Icon::from_rgba(ICON_RGBA.to_vec(), 32, 32) {
+                attrs = attrs.with_window_icon(Some(icon));
+            }
 
             let window = Arc::new(el.create_window(attrs).expect("window"));
 
@@ -60,9 +71,12 @@ impl ApplicationHandler for LunulaApp {
         }
     }
 
-    fn user_event(&mut self, _el: &ActiveEventLoop, _event: ()) {
+    fn user_event(&mut self, el: &ActiveEventLoop, _event: ()) {
         if let Some(s) = self.state.as_mut() {
-            s.drain_pty();
+            if !s.drain_pty() || s.should_exit {
+                el.exit();
+                return;
+            }
             s.window.request_redraw();
         }
     }
@@ -72,6 +86,11 @@ impl ApplicationHandler for LunulaApp {
             el.set_control_flow(ControlFlow::Wait);
             return;
         };
+
+        if s.should_exit {
+            el.exit();
+            return;
+        }
 
         if s.high_fps_animating {
             el.set_control_flow(ControlFlow::Poll);
@@ -90,6 +109,11 @@ impl ApplicationHandler for LunulaApp {
     fn window_event(&mut self, el: &ActiveEventLoop, _wid: WindowId, event: WindowEvent) {
         let Some(s) = self.state.as_mut() else { return };
 
+        if s.should_exit {
+            el.exit();
+            return;
+        }
+
         match event {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Focused(focused) => {
@@ -100,6 +124,28 @@ impl ApplicationHandler for LunulaApp {
                 s.resize(sz);
                 s.window.request_redraw();
             }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                s.resize(s.window.inner_size());
+                s.window.request_redraw();
+            }
+            WindowEvent::Ime(ime_event) => match ime_event {
+                winit::event::Ime::Commit(text) => {
+                    if let Some(pane) = s.tab_manager.active_pane_mut() {
+                        pane.terminal.clear_selection();
+                        pane.pty.write_bytes(text.as_bytes());
+                        pane.terminal.scroll_to_bottom();
+                        if !s.drain_pty() || s.should_exit {
+                            el.exit();
+                            return;
+                        }
+                        s.window.request_redraw();
+                    }
+                }
+                winit::event::Ime::Preedit(_, _) => {
+                    s.window.request_redraw();
+                }
+                _ => {}
+            },
             WindowEvent::MouseWheel { delta, .. } => {
                 s.handle_mouse_wheel(delta);
             }
@@ -132,7 +178,10 @@ impl ApplicationHandler for LunulaApp {
                 s.handle_mouse_right();
             }
             WindowEvent::RedrawRequested => {
-                s.render();
+                if !s.render() || s.should_exit {
+                    el.exit();
+                    return;
+                }
             }
             _ => {}
         }

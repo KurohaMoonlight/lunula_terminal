@@ -21,6 +21,10 @@ path = "src/bin/lfetch.rs"
 name = "limg"
 path = "src/bin/limg.rs"
 
+[[bin]]
+name = "lpm"
+path = "src/bin/lpm.rs"
+
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
 env_logger = "0.11.11"
@@ -35,6 +39,9 @@ vte = "0.15.0"
 wgpu = "30.0.2"
 winit = "0.30.13"
 yazi = "0.2.2"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [profile.release]
 opt-level = 3

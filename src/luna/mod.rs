@@ -2,6 +2,7 @@
 
 pub mod buffer;
 pub mod console;
+pub mod syntax;
 pub mod ui;
 
 use buffer::TextBuffer;
@@ -13,6 +14,7 @@ pub fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let target_file = args.get(1).map(|s| s.as_str());
 
+    let theme = crate::theme::Theme::load_from_config();
     let mut buf = TextBuffer::open(target_file)?;
     let guard = ConsoleGuard::enter()?;
     let (mut cols, mut rows) = guard.size();
@@ -30,7 +32,7 @@ pub fn run() -> io::Result<()> {
         let text_cols = cols.saturating_sub(gutter_w).max(10);
         buf.adjust_viewport(view_rows, text_cols);
 
-        ui::render(&buf, cols, rows, &status_msg, &prompt)?;
+        ui::render(&buf, cols, rows, &status_msg, &prompt, &theme)?;
 
         match guard.read_event()? {
             InputEvent::Resize(c, r) => {

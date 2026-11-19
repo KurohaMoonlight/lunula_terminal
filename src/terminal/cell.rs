@@ -7,27 +7,27 @@ pub struct ColorRgb {
     pub b: u8,
 }
 
+pub const DEFAULT_ANSI_16: [ColorRgb; 16] = [
+    ColorRgb { r: 22, g: 22, b: 29 },    // 0: Black (sumiInk0 #16161D)
+    ColorRgb { r: 195, g: 64, b: 67 },   // 1: Red (autumnRed #C34043)
+    ColorRgb { r: 118, g: 148, b: 106 }, // 2: Green (autumnGreen #76946A)
+    ColorRgb { r: 192, g: 163, b: 110 }, // 3: Yellow (boatYellow1 #C0A36E)
+    ColorRgb { r: 126, g: 156, b: 216 }, // 4: Blue (crystalBlue #7E9CD8)
+    ColorRgb { r: 149, g: 127, b: 184 }, // 5: Magenta (oniViolet #957FB8)
+    ColorRgb { r: 106, g: 149, b: 137 }, // 6: Cyan (waveAqua1 #6A9589)
+    ColorRgb { r: 200, g: 192, b: 147 }, // 7: White (oldWhite #C8C093)
+    ColorRgb { r: 114, g: 113, b: 105 }, // 8: Bright Black (fujiGray #727169)
+    ColorRgb { r: 232, g: 36, b: 36 },   // 9: Bright Red (samuraiRed #E82424)
+    ColorRgb { r: 152, g: 187, b: 108 }, // 10: Bright Green (springGreen #98BB6C)
+    ColorRgb { r: 230, g: 195, b: 132 }, // 11: Bright Yellow (boatYellow2 #E6C384)
+    ColorRgb { r: 127, g: 180, b: 202 }, // 12: Bright Blue (springBlue #7FB4CA)
+    ColorRgb { r: 210, g: 126, b: 153 }, // 13: Bright Magenta (sakuraPink #D27E99)
+    ColorRgb { r: 122, g: 168, b: 159 }, // 14: Bright Cyan (waveAqua2 #7AA89F)
+    ColorRgb { r: 220, g: 215, b: 186 }, // 15: Bright White (fujiWhite #DCD7BA)
+];
+
 pub fn ansi_16_color(idx: usize) -> ColorRgb {
-    // Kanagawa Wave 16-color authentic pigment palette
-    const PALETTE: [ColorRgb; 16] = [
-        ColorRgb { r: 22, g: 22, b: 29 },    // 0: Black (sumiInk0 #16161D)
-        ColorRgb { r: 195, g: 64, b: 67 },   // 1: Red (autumnRed #C34043)
-        ColorRgb { r: 118, g: 148, b: 106 }, // 2: Green (autumnGreen #76946A)
-        ColorRgb { r: 192, g: 163, b: 110 }, // 3: Yellow (boatYellow1 #C0A36E)
-        ColorRgb { r: 126, g: 156, b: 216 }, // 4: Blue (crystalBlue #7E9CD8)
-        ColorRgb { r: 149, g: 127, b: 184 }, // 5: Magenta (oniViolet #957FB8)
-        ColorRgb { r: 106, g: 149, b: 137 }, // 6: Cyan (waveAqua1 #6A9589)
-        ColorRgb { r: 200, g: 192, b: 147 }, // 7: White (oldWhite #C8C093)
-        ColorRgb { r: 114, g: 113, b: 105 }, // 8: Bright Black (fujiGray #727169)
-        ColorRgb { r: 232, g: 36, b: 36 },   // 9: Bright Red (samuraiRed #E82424)
-        ColorRgb { r: 152, g: 187, b: 108 }, // 10: Bright Green (springGreen #98BB6C)
-        ColorRgb { r: 230, g: 195, b: 132 }, // 11: Bright Yellow (boatYellow2 #E6C384)
-        ColorRgb { r: 127, g: 180, b: 202 }, // 12: Bright Blue (springBlue #7FB4CA)
-        ColorRgb { r: 210, g: 126, b: 153 }, // 13: Bright Magenta (sakuraPink #D27E99)
-        ColorRgb { r: 122, g: 168, b: 159 }, // 14: Bright Cyan (waveAqua2 #7AA89F)
-        ColorRgb { r: 220, g: 215, b: 186 }, // 15: Bright White (fujiWhite #DCD7BA)
-    ];
-    PALETTE[idx.min(15)]
+    DEFAULT_ANSI_16[idx.min(15)]
 }
 
 pub fn color_256(idx: u8) -> ColorRgb {

@@ -27,9 +27,73 @@ impl GpuState {
             _ => None,
         };
 
-        // F1 / KeyCode::F1: Toggle Help Modal
-        if matches!(&key_event.logical_key, Key::Named(NamedKey::F1))
-            || phys_code == Some(KeyCode::F1)
+        // Toggle Settings & Configuration Hub
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.toggle_settings,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) || (self.ctrl_pressed && (logical_char == Some(',') || phys_code == Some(KeyCode::Comma)))
+        {
+            self.toggle_settings();
+            return;
+        }
+
+        // Settings Modal Navigation & Execution
+        if self.settings_visible {
+            if matches!(&key_event.logical_key, Key::Named(NamedKey::Escape))
+                || phys_code == Some(KeyCode::Escape)
+                || logical_char == Some('q')
+                || logical_char == Some('Q')
+            {
+                self.settings_visible = false;
+                self.window.request_redraw();
+                return;
+            }
+
+            match phys_code {
+                Some(KeyCode::ArrowDown | KeyCode::KeyJ) => {
+                    self.settings_selected_index = (self.settings_selected_index + 1).min(5);
+                    self.update_settings_buffer();
+                    self.window.request_redraw();
+                    return;
+                }
+                Some(KeyCode::ArrowUp | KeyCode::KeyK) => {
+                    self.settings_selected_index = self.settings_selected_index.saturating_sub(1);
+                    self.update_settings_buffer();
+                    self.window.request_redraw();
+                    return;
+                }
+                Some(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                    self.execute_settings_action(self.settings_selected_index);
+                    return;
+                }
+                _ => {}
+            }
+
+            if let Some(ch @ '1'..='6') = logical_char {
+                let idx = (ch as usize) - ('1' as usize);
+                self.settings_selected_index = idx;
+                self.execute_settings_action(idx);
+                return;
+            }
+
+            return;
+        }
+
+        // Toggle Help Modal
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.toggle_help,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) || (self.shift_pressed
+            && (matches!(&key_event.logical_key, Key::Named(NamedKey::F1))
+                || phys_code == Some(KeyCode::F1)))
         {
             self.toggle_help();
             return;
@@ -47,7 +111,7 @@ impl GpuState {
         }
 
         if self.help_visible {
-            let card_h = 580.0f32.min(content_h - 24.0);
+            let card_h = super::HELP_MODAL_HEIGHT.min(content_h - 24.0);
             let visible_h = card_h - 32.0;
             let max_scroll = (self.help_total_height - visible_h).max(0.0);
             let cell_h = self.text_engine.cell_height;
@@ -111,8 +175,15 @@ impl GpuState {
             return;
         }
 
-        // 1. F11 Fullscreen toggle
-        if matches!(&key_event.logical_key, Key::Named(NamedKey::F11))
+        // 1. Fullscreen toggle
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.toggle_fullscreen,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) || matches!(&key_event.logical_key, Key::Named(NamedKey::F11))
             || phys_code == Some(KeyCode::F11)
         {
             self.toggle_maximize();
@@ -144,6 +215,173 @@ impl GpuState {
                 }
                 _ => {}
             }
+        }
+
+        // --- Dynamic Configurable Keybindings ---
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.new_tab,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            let _ = self.tab_manager.new_tab(
+                content_w,
+                content_h,
+                &mut self.text_engine,
+                &self.config,
+            );
+            self.window.request_redraw();
+            return;
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.close_pane,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            let alive = self.tab_manager.close_active_pane(
+                content_w,
+                content_h,
+                &mut self.text_engine,
+                &self.config,
+            );
+            if !alive {
+                el.exit();
+            } else {
+                self.window.request_redraw();
+            }
+            return;
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.split_vertical,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            let _ = self.tab_manager.split_active_pane(
+                pane::SplitDirection::Vertical,
+                content_w,
+                content_h,
+                &mut self.text_engine,
+                &self.config,
+            );
+            self.window.request_redraw();
+            return;
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.split_horizontal,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            let _ = self.tab_manager.split_active_pane(
+                pane::SplitDirection::Horizontal,
+                content_w,
+                content_h,
+                &mut self.text_engine,
+                &self.config,
+            );
+            self.window.request_redraw();
+            return;
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.next_tab,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            self.tab_manager.next_tab(
+                content_w,
+                content_h,
+                &mut self.text_engine,
+                &self.config,
+            );
+            self.window.request_redraw();
+            return;
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.prev_tab,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            self.tab_manager.prev_tab(
+                content_w,
+                content_h,
+                &mut self.text_engine,
+                &self.config,
+            );
+            self.window.request_redraw();
+            return;
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.search,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            if let Some(pane) = self.tab_manager.active_pane_mut() {
+                if pane.vi_mode.is_none() {
+                    let sb_len = pane.terminal.scrollback.len();
+                    let cur_abs_row = sb_len + pane.terminal.cursor_y;
+                    pane.vi_mode = Some(pane::ViMode::new(pane.terminal.cursor_x, cur_abs_row));
+                }
+                if let Some(vi) = &mut pane.vi_mode {
+                    vi.in_search_input = true;
+                    if !vi.search_query.is_empty() {
+                        vi.next_match(&mut pane.terminal);
+                    }
+                }
+                self.window.request_redraw();
+                return;
+            }
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.reload_config,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            self.reload_config();
+            return;
+        }
+
+        if crate::config::matches_shortcut(
+            &self.config.keybinds.reload_profile,
+            self.ctrl_pressed,
+            self.shift_pressed,
+            self.alt_pressed,
+            phys_code,
+            logical_char,
+        ) {
+            if let Some(pane) = self.tab_manager.active_pane_mut() {
+                pane.pty.write_bytes(b". $PROFILE\r\n");
+                pane.terminal.scroll_to_bottom();
+            }
+            return;
         }
 
         // 3. Ctrl + Shift shortcuts: Tabs, Splits, Help & Config management
@@ -299,24 +537,29 @@ impl GpuState {
                     return;
                 }
             }
-        }
 
-        // 4. Ctrl + W (without shift) when multiple split panes exist
-        if self.ctrl_pressed && !self.shift_pressed {
-            if (phys_code == Some(KeyCode::KeyW)
-                || matches!(logical_char, Some('w' | 'W' | '\x17')))
-                && self.tab_manager.active_tab().root.all_leaves().len() > 1
+            // Ctrl + Shift + F: Quick Find / Scrollback Search
+            if phys_code == Some(KeyCode::KeyF)
+                || matches!(logical_char, Some('f' | 'F' | '\x06'))
             {
-                self.tab_manager.close_active_pane(
-                    content_w,
-                    content_h,
-                    &mut self.text_engine,
-                    &self.config,
-                );
-                self.window.request_redraw();
-                return;
+                if let Some(pane) = self.tab_manager.active_pane_mut() {
+                    if pane.vi_mode.is_none() {
+                        let sb_len = pane.terminal.scrollback.len();
+                        let cur_abs_row = sb_len + pane.terminal.cursor_y;
+                        pane.vi_mode = Some(pane::ViMode::new(pane.terminal.cursor_x, cur_abs_row));
+                    }
+                    if let Some(vi) = &mut pane.vi_mode {
+                        vi.in_search_input = true;
+                        if !vi.search_query.is_empty() {
+                            vi.next_match(&mut pane.terminal);
+                        }
+                    }
+                    self.window.request_redraw();
+                    return;
+                }
             }
         }
+
 
         // 5. Ctrl + Tab / Ctrl + 1..9: Tab switching
         if self.ctrl_pressed {
@@ -387,17 +630,25 @@ impl GpuState {
                     match &key_event.logical_key {
                         Key::Named(NamedKey::Escape) => {
                             vi.in_search_input = false;
+                            pane.vi_mode = None;
+                            pane.terminal.clear_selection();
                             self.window.request_redraw();
                             return;
                         }
                         Key::Named(NamedKey::Enter) => {
-                            vi.in_search_input = false;
-                            vi.execute_search(&mut pane.terminal);
+                            if self.shift_pressed {
+                                vi.prev_match(&mut pane.terminal);
+                            } else if vi.search_matches.is_empty() && !vi.search_query.is_empty() {
+                                vi.execute_search(&mut pane.terminal);
+                            } else {
+                                vi.next_match(&mut pane.terminal);
+                            }
                             self.window.request_redraw();
                             return;
                         }
                         Key::Named(NamedKey::Backspace) => {
                             vi.search_query.pop();
+                            vi.execute_search(&mut pane.terminal);
                             self.window.request_redraw();
                             return;
                         }
@@ -405,6 +656,7 @@ impl GpuState {
                             if let Some(c) = logical_char {
                                 if !c.is_control() {
                                     vi.search_query.push(c);
+                                    vi.execute_search(&mut pane.terminal);
                                     self.window.request_redraw();
                                     return;
                                 }
@@ -475,6 +727,15 @@ impl GpuState {
                         return;
                     }
                     Key::Named(NamedKey::Enter) => {
+                        if !vi.search_matches.is_empty() {
+                            if self.shift_pressed {
+                                vi.prev_match(&mut pane.terminal);
+                            } else {
+                                vi.next_match(&mut pane.terminal);
+                            }
+                            self.window.request_redraw();
+                            return;
+                        }
                         if let Some(url) =
                             pane.terminal.get_hyperlink_at(vi.cursor_col, vi.cursor_abs_row)
                         {
@@ -683,6 +944,8 @@ impl GpuState {
                             pane.terminal.clear_selection();
                             if self.ctrl_pressed {
                                 pane.pty.write_bytes(b"\x08");
+                            } else if self.alt_pressed {
+                                pane.pty.write_bytes(b"\x1b\x7f");
                             } else {
                                 pane.pty.write_bytes(b"\x7f");
                             }
@@ -841,6 +1104,7 @@ impl GpuState {
                                         'd' | 'D' | '\x04' => pane.pty.write_bytes(b"\x04"),
                                         'a' | 'A' | '\x01' => pane.pty.write_bytes(b"\x01"),
                                         'z' | 'Z' | '\x1a' => pane.pty.write_bytes(b"\x1a"),
+                                        'w' | 'W' | '\x17' => pane.pty.write_bytes(b"\x17"),
                                         _ => {
                                             if ch.is_ascii_alphabetic() {
                                                 let b =
@@ -849,6 +1113,14 @@ impl GpuState {
                                             }
                                         }
                                     }
+                                }
+                            } else if self.alt_pressed {
+                                pane.terminal.clear_selection();
+                                for ch in text_str.chars() {
+                                    let mut buf = [0u8; 4];
+                                    let s = ch.encode_utf8(&mut buf);
+                                    pane.pty.write_bytes(b"\x1b");
+                                    pane.pty.write_bytes(s.as_bytes());
                                 }
                             } else {
                                 pane.terminal.clear_selection();
@@ -862,7 +1134,10 @@ impl GpuState {
         }
 
         // Non-blocking drain; if ConPTY echoes asynchronously, `conpty-reader` wakes the event loop immediately
-        self.drain_pty();
+        if !self.drain_pty() || self.should_exit {
+            el.exit();
+            return;
+        }
         self.window.request_redraw();
     }
 }

@@ -9,6 +9,7 @@ mod platform;
 mod pty;
 mod render;
 mod terminal;
+pub mod theme;
 mod wobble;
 
 #[global_allocator]

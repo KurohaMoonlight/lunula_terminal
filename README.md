@@ -9,6 +9,20 @@
 
 ---
 
+## 📚 Dokumentasi Lengkap (`docs/`)
+
+Lunula Terminal dilengkapi panduan terperinci di direktori `docs/`:
+
+- ⚙️ **[Panduan Konfigurasi Lengkap (CONFIGURATION.md)](file:///e:/My%20Projects/lunula_terminal/docs/CONFIGURATION.md)**: Panduan parameter `lunula.lua`, kustomisasi 16 palet ANSI `colors.lua`, dan pembuatan tema kustom di `themes/`.
+- ⌨️ **[Cheat Sheet Navigasi & Shortcuts (KEYBINDINGS.md)](file:///e:/My%20Projects/lunula_terminal/docs/KEYBINDINGS.md)**: Daftar lengkap shortcut split panes, tabs, quick search, Vi copy mode, dan kustomisasi `keybinds.lua`.
+- 🌙 **[Panduan Micro-Editor luna (LUNA_EDITOR.md)](file:///e:/My%20Projects/lunula_terminal/docs/LUNA_EDITOR.md)**: Cara kerja editor bawaan (<400 KB), syntax highlighting multi-bahasa, dan integrasi sebagai Git default editor.
+- 🧰 **[Utilitas Pendamping CLI (CLI_COMPANIONS.md)](file:///e:/My%20Projects/lunula_terminal/docs/CLI_COMPANIONS.md)**: Panduan penggunaan `lfetch` (3D raymarched fetch tool) dan `limg` (inline Kitty graphics image viewer).
+- 🔍 **[Pemecahan Masalah & Optimasi (TROUBLESHOOTING.md)](file:///e:/My%20Projects/lunula_terminal/docs/TROUBLESHOOTING.md)**: Solusi font Nerd Font missing glyphs, profil hemat baterai laptop, dan input IME / Emojis.
+- 🏗️ **[Arsitektur Teknis (ARCHITECTURE.md)](file:///e:/My%20Projects/lunula_terminal/docs/ARCHITECTURE.md)**: Arsitektur internal modul, alur data WGPU, dan integrasi Windows ConPTY.
+- ⚡ **[Optimasi Performa & Memori (OPTIMIZATIONS.md)](file:///e:/My%20Projects/lunula_terminal/docs/OPTIMIZATIONS.md)**: Rincian teknis 7 strategi optimasi footprint memori & zero-allocation render pass.
+
+---
+
 ## 📂 Struktur Folder Proyek (Modular)
 
 Kode sumber telah direfaktor dari berkas monolitik (>2.300 baris per berkas) menjadi arsitektur modular dengan tanggung jawab tunggal (*Single Responsibility Principle*):
@@ -49,11 +63,19 @@ lunula_terminal/
     │   └── item.rs             # State Pane tunggal, fisika kursor, & cache shaping baris
     ├── pty/                    # Antarmuka ConPTY Windows & background reader thread
     │   └── mod.rs              # PtyManager dengan AtomicBool exited & wake coalescing
+    ├── luna/                   # Built-in micro-editor nano-style zero-dependency (luna.exe)
+    │   ├── mod.rs              # Loop event console & orchestrator
+    │   ├── buffer.rs           # TextBuffer dengan undo Ctrl+Z & search Ctrl+F
+    │   ├── console.rs          # Win32 Console Raw Mode guard & event parser
+    │   ├── syntax.rs           # Zero-alloc lexical syntax highlighter Kanagawa Wave
+    │   └── ui.rs               # TUI frame renderer dengan gutter nomor baris
     ├── render/                 # Mesin teks Glyphon & pipeline background quad WGPU
     │   ├── mod.rs              # TextEngine dengan scratch_vertices zero-alloc per frame
     │   └── shaders/
     │       ├── bg.wgsl         # Shader WGSL untuk background quad & dekorasi
     │       └── wobble.wgsl     # Shader WGSL untuk efek jelly window & tombol kontrol
+    ├── theme/                  # Multi-theme engine (Kanagawa, Tokyo Night, Catppuccin, Gruvbox, Nord)
+    │   └── mod.rs              # Struct Theme, ColorRgb, ANSI TrueColor generator & parser Lua
     ├── wobble/                 # Simulasi pegas 2D & offscreen texture mapping
     │   ├── mod.rs              # WobbleWindow dengan static index buffer & dirty vertex upload
     │   └── physics.rs          # Solver mass-spring-damper dengan early-exit saat diam
@@ -74,13 +96,15 @@ lunula_terminal/
 | `Ctrl + Shift + E` | Split Pane Vertikal (kiri / kanan) |
 | `Ctrl + Shift + D` | Split Pane Horizontal (atas / bawah) |
 | `Alt + Panah (← ↑ → ↓)` | Pindah fokus antar Split Pane |
-| `Ctrl + W` / `Ctrl + Shift + W` | Tutup Split Pane aktif / Tab aktif |
+| `Ctrl + Shift + W` | Tutup Split Pane aktif / Tab aktif |
 | `Ctrl + C` / `Ctrl + Shift + C` | Salin teks yang diseleksi (atau kirim `SIGINT` jika tidak ada seleksi) |
 | `Ctrl + V` / `Ctrl + Shift + V` / `Klik Kanan` | Tempel (*paste*) teks dari Clipboard |
 | `Ctrl + Klik Kiri` | Buka tautan URL (`http://`, `https://`, atau OSC 8) di peramban |
+| `Ctrl + Shift + F` | Pencarian cepat teks di scrollback (*Quick Search*) |
 | `Ctrl + Shift + R` | *Hot-reload* berkas konfigurasi `lunula.lua` |
 | `Ctrl + Shift + P` | Muat ulang profil PowerShell (`. $PROFILE`) |
-| `F1` / `Ctrl + Shift + H` | Buka / tutup jendela panduan *shortcut* |
+| `Ctrl + ,` / `Tombol Gear ⚙️` | Buka Settings Modal & Configuration Hub |
+| `Shift + F1` / `Ctrl + Shift + H` | Buka / tutup jendela panduan *shortcut* |
 | `F11` | Beralih mode *Fullscreen* / *Maximize* |
 
 ---

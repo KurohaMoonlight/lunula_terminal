@@ -60,6 +60,8 @@ pub struct TerminalGrid {
     pub apc_buffer: Option<Vec<u8>>,
     /// Pending DCS graphics buffer
     pub dcs_graphics_buffer: Vec<u8>,
+    /// 16 ANSI Palette colors
+    pub palette: [ColorRgb; 16],
 }
 
 impl TerminalGrid {
@@ -117,7 +119,13 @@ impl TerminalGrid {
             graphics: graphics::KittyGraphicsManager::new(),
             apc_buffer: None,
             dcs_graphics_buffer: Vec::new(),
+            palette: cell::DEFAULT_ANSI_16,
         }
+    }
+
+    pub fn set_palette(&mut self, palette: [ColorRgb; 16]) {
+        self.palette = palette;
+        self.mark_all_rows_dirty();
     }
 
     #[inline]
@@ -1058,5 +1066,56 @@ mod tests {
         grid.advance_bytes(chunk3);
         assert_eq!(grid.graphics.images.len(), 1); // Completed upon ST!
         assert_eq!(grid.graphics.images[0].id, 102);
+    }
+
+    #[test]
+    fn test_csi_2j_and_3j_standards() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.advance_bytes(b"line 1\r\nline 2\r\nline 3\r\nline 4\r\nline 5\r\nline 6");
+        assert!(grid.scrollback.len() > 0);
+
+        // Position cursor at (5, 2)
+        grid.advance_bytes(b"\x1b[3;6H");
+        assert_eq!(grid.cursor_x, 5);
+        assert_eq!(grid.cursor_y, 2);
+
+        // CSI 2 J clears screen cells but preserves cursor position per ECMA-48
+        grid.advance_bytes(b"\x1b[2J");
+        assert_eq!(grid.cursor_x, 5);
+        assert_eq!(grid.cursor_y, 2);
+        assert_eq!(grid.cells[0][0].c, ' ');
+
+        // Type new content
+        grid.advance_bytes(b"hello");
+        assert_eq!(grid.cursor_x, 10);
+        assert_eq!(grid.cells[2][5].c, 'h');
+
+        // CSI 3 J clears scrollback only, keeping visible screen and cursor
+        grid.advance_bytes(b"\x1b[3J");
+        assert_eq!(grid.scrollback.len(), 0);
+        assert_eq!(grid.cursor_x, 10);
+        assert_eq!(grid.cells[2][5].c, 'h');
+    }
+
+    #[test]
+    fn test_osc_color_queries_and_osc52() {
+        let mut grid = TerminalGrid::new(20, 5);
+
+        // OSC 10 query -> returns foreground rgb response
+        grid.advance_bytes(b"\x1b]10;?\x1b\\");
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b]10;rgb:dc00/d700/ba00\x1b\\");
+
+        // OSC 11 query -> returns background rgb response
+        grid.advance_bytes(b"\x1b]11;?\x1b\\");
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b]11;rgb:1f00/1f00/2800\x1b\\");
+
+        // OSC 52 set clipboard: base64 of "lunula" is "bHVudWxh"
+        grid.advance_bytes(b"\x1b]52;c;bHVudWxh\x1b\\");
+        #[cfg(windows)]
+        {
+            if let Some(text) = crate::platform::clipboard::get_text() {
+                assert_eq!(text, "lunula");
+            }
+        }
     }
 }

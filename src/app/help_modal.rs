@@ -1,25 +1,61 @@
-//! Help & Shortcuts reference overlay builder (`F1` / `Ctrl+Shift+H`).
+//! Help & Shortcuts reference overlay builder (Dynamic keybindings).
 
+use crate::config::KeybindsConfig;
 use crate::render::TextEngine;
 use crate::terminal::{CellStyle, ColorRgb};
+use crate::theme::Theme;
 
-pub fn build_help_buffer(text_engine: &mut TextEngine, buffer: &mut glyphon::Buffer) -> f32 {
+pub fn build_help_buffer(
+    text_engine: &mut TextEngine,
+    buffer: &mut glyphon::Buffer,
+    keybinds: &KeybindsConfig,
+    theme: &Theme,
+) -> f32 {
     let mut spans = Vec::with_capacity(48);
 
     let header_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 126, g: 156, b: 216 }) // Kanagawa crystalBlue (#7E9CD8)
+        .with_fg(ColorRgb {
+            r: theme.syntax_type.r,
+            g: theme.syntax_type.g,
+            b: theme.syntax_type.b,
+        })
         .with_bold(true);
+
     let section_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 230, g: 195, b: 132 }) // Kanagawa boatYellow2 (#E6C384)
+        .with_fg(ColorRgb {
+            r: theme.syntax_keyword.r,
+            g: theme.syntax_keyword.g,
+            b: theme.syntax_keyword.b,
+        })
         .with_bold(true);
+
     let key_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 152, g: 187, b: 108 }) // Kanagawa springGreen (#98BB6C)
+        .with_fg(ColorRgb {
+            r: theme.gutter_active.r,
+            g: theme.gutter_active.g,
+            b: theme.gutter_active.b,
+        })
         .with_bold(true);
-    let desc_style = CellStyle::new().with_fg(ColorRgb { r: 220, g: 215, b: 186 }); // Kanagawa fujiWhite (#DCD7BA)
+
+    let desc_style = CellStyle::new().with_fg(ColorRgb {
+        r: theme.fg.r,
+        g: theme.fg.g,
+        b: theme.fg.b,
+    });
+
     let sub_style = CellStyle::new()
-        .with_fg(ColorRgb { r: 114, g: 113, b: 105 }) // Kanagawa fujiGray (#727169)
+        .with_fg(ColorRgb {
+            r: theme.gutter_fg.r,
+            g: theme.gutter_fg.g,
+            b: theme.gutter_fg.b,
+        })
         .with_dim(true);
-    let border_style = CellStyle::new().with_fg(ColorRgb { r: 54, g: 54, b: 70 }); // Kanagawa sumiInk5 (#363646)
+
+    let border_style = CellStyle::new().with_fg(ColorRgb {
+        r: theme.border.r,
+        g: theme.border.g,
+        b: theme.border.b,
+    });
 
     spans.push((
         "  🌙 LUNULA TERMINAL ── Shortcuts & Features Reference\n".to_string(),
@@ -31,18 +67,13 @@ pub fn build_help_buffer(text_engine: &mut TextEngine, buffer: &mut glyphon::Buf
     ));
 
     spans.push(("  🪟 SPLIT PANES\n".to_string(), section_style));
-    spans.push(("  Ctrl + Shift + E    ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.split_vertical), key_style));
     spans.push(("Split Vertically (side-by-side)\n".to_string(), desc_style));
-    spans.push(("  Ctrl + Shift + D    ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.split_horizontal), key_style));
     spans.push(("Split Horizontally (top / bottom)\n".to_string(), desc_style));
-    spans.push(("  Ctrl + Shift + W    ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.close_pane), key_style));
     spans.push((
         "Close Active Pane / Split (or exit if last)\n".to_string(),
-        desc_style,
-    ));
-    spans.push(("  Ctrl + W            ".to_string(), key_style));
-    spans.push((
-        "Close Active Split Pane (when multiple panes open)\n".to_string(),
         desc_style,
     ));
     spans.push(("  Alt + Arrows        ".to_string(), key_style));
@@ -62,27 +93,29 @@ pub fn build_help_buffer(text_engine: &mut TextEngine, buffer: &mut glyphon::Buf
     ));
 
     spans.push(("  📑 TABS\n".to_string(), section_style));
-    spans.push(("  Ctrl + Shift + T    ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.new_tab), key_style));
     spans.push(("New Tab\n".to_string(), desc_style));
-    spans.push(("  Ctrl + Tab          ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.next_tab), key_style));
     spans.push(("Switch to Next Tab\n".to_string(), desc_style));
-    spans.push(("  Ctrl + Shift + Tab  ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.prev_tab), key_style));
     spans.push(("Switch to Previous Tab\n".to_string(), desc_style));
     spans.push(("  Ctrl + 1..9         ".to_string(), key_style));
     spans.push(("Jump directly to Tab 1 through 9\n\n".to_string(), desc_style));
 
-    spans.push(("  ⚡ WINDOW & HOT RELOAD\n".to_string(), section_style));
-    spans.push(("  F11                 ".to_string(), key_style));
-    spans.push(("Toggle Fullscreen / Maximize\n".to_string(), desc_style));
-    spans.push(("  Ctrl + Shift + R    ".to_string(), key_style));
+    spans.push(("  ⚡ WINDOW, SETTINGS & RELOAD\n".to_string(), section_style));
+    spans.push((format!("  {:<20}", keybinds.toggle_settings), key_style));
+    spans.push(("Open Settings Hub (Gear button)\n".to_string(), desc_style));
+    spans.push((format!("  {:<20}", keybinds.reload_config), key_style));
     spans.push(("Hot Reload configuration (lunula.lua)\n".to_string(), desc_style));
-    spans.push(("  Ctrl + Shift + P    ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.reload_profile), key_style));
     spans.push((
         "Hot Reload PowerShell profile (. $PROFILE)\n".to_string(),
         desc_style,
     ));
-    spans.push(("  F1 / Ctrl+Shift+H   ".to_string(), key_style));
+    spans.push((format!("  {:<20}", keybinds.toggle_help), key_style));
     spans.push(("Toggle this Help reference menu\n".to_string(), desc_style));
+    spans.push((format!("  {:<20}", keybinds.toggle_fullscreen), key_style));
+    spans.push(("Toggle Fullscreen / Maximize\n".to_string(), desc_style));
     spans.push(("  Drag Titlebar       ".to_string(), key_style));
     spans.push((
         "Move window with jelly wobble physics\n\n".to_string(),
@@ -106,6 +139,8 @@ pub fn build_help_buffer(text_engine: &mut TextEngine, buffer: &mut glyphon::Buf
     spans.push(("Paste clipboard text\n\n".to_string(), desc_style));
 
     spans.push(("  🔍 VI MODE, SEARCH & HINTS\n".to_string(), section_style));
+    spans.push((format!("  {:<20}", keybinds.search), key_style));
+    spans.push(("Quick Search across scrollback buffer\n".to_string(), desc_style));
     spans.push(("  Ctrl + Shift + Space".to_string(), key_style));
     spans.push(("Toggle Alacritty-style Vi Mode\n".to_string(), desc_style));
     spans.push(("  h / j / k / l       ".to_string(), key_style));

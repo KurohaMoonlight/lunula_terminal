@@ -4,6 +4,11 @@
 -- ==========================================================
 
 return {
+    -- Pilihan tema tampilan terminal & luna editor:
+    -- Preset bawaan: "kanagawa" (default), "tokyo_night", "catppuccin", "gruvbox", "nord"
+    -- Atau buat tema custom di folder themes/: misal "cyberpunk" (themes/cyberpunk.lua)
+    theme = "kanagawa",
+
     window = {
         -- Lebar & tinggi: "auto" atau angka pixel (e.g. 1100, 700)
         -- Jika "auto", Lunula otomatis menyesuaikan resolusi monitor aktif.
@@ -35,7 +40,7 @@ return {
     },
     cursor = {
         -- Bentuk kursor default: "block", "beam", atau "underline"
-        shape = "block",
+        shape = "underline",
         -- Efek berkedip lembut (sine smooth blinking)
         blinking = true,
         -- Warna kursor (hex atau {r, g, b})
@@ -63,6 +68,8 @@ return {
     colors = {
         -- Warna highlight teks yang di-select mouse
         selection = "#2d4f67", -- Kanagawa waveBlue2
+        -- Catatan: Untuk kustomisasi lengkap 16 palet warna ANSI terminal,
+        -- silakan edit berkas `colors.lua` (dapat dibuka langsung via tombol Gear ⚙️ -> [2])
     },
     fetch = {
         -- Pilihan animasi lfetch: 1 atau 2
@@ -71,5 +78,11 @@ return {
         animation = 2,
         -- Mode default: true = animasi interaktif live, false = cetak 1 frame instan (< 5ms)
         live = true,
+    },
+    shell = {
+        -- Program shell utama (e.g. "powershell.exe", "pwsh.exe", "cmd.exe", "wsl.exe", "bash.exe")
+        program = "powershell.exe",
+        -- Argumen shell saat inisialisasi
+        args = { "-NoLogo" },
     },
 }

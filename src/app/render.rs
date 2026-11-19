@@ -7,7 +7,11 @@ use crate::terminal;
 use std::time::{Duration, Instant};
 
 impl GpuState {
-    pub fn render(&mut self) {
+    pub fn render(&mut self) -> bool {
+        if self.should_exit {
+            return false;
+        }
+
         let now = Instant::now();
         let dt = (now - self.last_frame_time).as_secs_f32().clamp(0.001, 0.05);
         self.last_frame_time = now;
@@ -25,7 +29,9 @@ impl GpuState {
         let cell_h = self.text_engine.cell_height;
 
         // 2. Drain PTY inputs across all tabs and sync visible caches
-        self.drain_pty();
+        if !self.drain_pty() || self.tab_manager.tabs.is_empty() {
+            return false;
+        }
 
         // 3. Update physics & sub-pixel smooth scrolling for active tab panes
         let active_tab = self.tab_manager.active_tab();
@@ -208,7 +214,11 @@ impl GpuState {
                 y: tab_bar_y,
                 w: content_w,
                 h: tab_bar_h,
-                color: terminal::ColorRgb { r: 22, g: 22, b: 29 }, // sumiInk0
+                color: terminal::ColorRgb {
+                    r: self.theme.tab_bar.r,
+                    g: self.theme.tab_bar.g,
+                    b: self.theme.tab_bar.b,
+                },
                 alpha: 0.95,
             });
             bg_rects.push(terminal::BgRect {
@@ -216,7 +226,11 @@ impl GpuState {
                 y: tab_bar_y + tab_bar_h - 1.0,
                 w: content_w,
                 h: 1.0,
-                color: terminal::ColorRgb { r: 54, g: 54, b: 70 }, // sumiInk5
+                color: terminal::ColorRgb {
+                    r: self.theme.border.r,
+                    g: self.theme.border.g,
+                    b: self.theme.border.b,
+                },
                 alpha: 0.70,
             });
 
@@ -231,17 +245,29 @@ impl GpuState {
 
                 let (bg_col, bg_alpha) = if is_active {
                     (
-                        terminal::ColorRgb { r: 45, g: 79, b: 103 }, // waveBlue2 (#2D4F67)
+                        terminal::ColorRgb {
+                            r: self.theme.selection.r,
+                            g: self.theme.selection.g,
+                            b: self.theme.selection.b,
+                        },
                         0.95,
                     )
                 } else if is_hover {
                     (
-                        terminal::ColorRgb { r: 34, g: 34, b: 44 }, // sumiInk3
+                        terminal::ColorRgb {
+                            r: self.theme.tab_active.r,
+                            g: self.theme.tab_active.g,
+                            b: self.theme.tab_active.b,
+                        },
                         0.80,
                     )
                 } else {
                     (
-                        terminal::ColorRgb { r: 24, g: 24, b: 32 }, // sumiInk2
+                        terminal::ColorRgb {
+                            r: self.theme.tab_bar.r,
+                            g: self.theme.tab_bar.g,
+                            b: self.theme.tab_bar.b,
+                        },
                         0.50,
                     )
                 };
@@ -256,14 +282,18 @@ impl GpuState {
                     alpha: bg_alpha,
                 });
 
-                // Active bottom highlight indicator (sleek 2px springBlue)
+                // Active bottom highlight indicator (sleek 2px indicator using theme cursor color)
                 if is_active {
                     bg_rects.push(terminal::BgRect {
                         x: pill_x + 2.0,
                         y: tab_bar_y + tab_bar_h - 3.0,
                         w: pill_w - 4.0,
                         h: 2.0,
-                        color: terminal::ColorRgb { r: 127, g: 180, b: 202 }, // springBlue (#7FB4CA)
+                        color: terminal::ColorRgb {
+                            r: self.theme.cursor.r,
+                            g: self.theme.cursor.g,
+                            b: self.theme.cursor.b,
+                        },
                         alpha: 1.0,
                     });
                 }
@@ -282,22 +312,34 @@ impl GpuState {
                 w: plus_w,
                 h: tab_bar_h - 6.0,
                 color: if is_plus_hover {
-                    terminal::ColorRgb { r: 45, g: 79, b: 103 } // waveBlue2
+                    terminal::ColorRgb {
+                        r: self.theme.selection.r,
+                        g: self.theme.selection.g,
+                        b: self.theme.selection.b,
+                    }
                 } else {
-                    terminal::ColorRgb { r: 28, g: 28, b: 36 } // sumiInk2
+                    terminal::ColorRgb {
+                        r: self.theme.tab_active.r,
+                        g: self.theme.tab_active.g,
+                        b: self.theme.tab_active.b,
+                    }
                 },
                 alpha: if is_plus_hover { 0.90 } else { 0.45 },
             });
         }
 
-        // Terminal Panes Body Background (sumiInk3 #1F1F28)
+        // Terminal Panes Body Background (uses active theme bg)
         let body_y = if tab_bar_visible { titlebar_h + tab_bar_h } else { titlebar_h };
         bg_rects.push(terminal::BgRect {
             x: 0.0,
             y: body_y,
             w: content_w,
             h: (content_h - body_y).max(0.0),
-            color: terminal::ColorRgb { r: 31, g: 31, b: 40 }, // sumiInk3
+            color: terminal::ColorRgb {
+                r: self.theme.bg.r,
+                g: self.theme.bg.g,
+                b: self.theme.bg.b,
+            },
             alpha: self.config.window.opacity,
         });
 
@@ -433,6 +475,16 @@ impl GpuState {
                                 alpha: cursor_alpha,
                             });
                         }
+                    }
+
+                    if id == active_pane_id {
+                        self.window.set_ime_cursor_area(
+                            winit::dpi::PhysicalPosition::new(
+                                pane.cursor_head[0] as i32,
+                                pane.cursor_head[1] as i32,
+                            ),
+                            winit::dpi::PhysicalSize::new(cell_w.max(1.0) as u32, cell_h.max(1.0) as u32),
+                        );
                     }
                 }
 
@@ -594,8 +646,8 @@ impl GpuState {
         }
 
         // 4f. Help Reference Modal Overlay
-        let card_w = 660.0f32.min(content_w - 24.0);
-        let card_h = 580.0f32.min(content_h - 24.0);
+        let card_w = super::HELP_MODAL_WIDTH.min(content_w - 24.0);
+        let card_h = super::HELP_MODAL_HEIGHT.min(content_h - 24.0);
         let card_x = (content_w - card_w) * 0.5;
         let card_y = (content_h - card_h) * 0.5;
 
@@ -605,24 +657,28 @@ impl GpuState {
                 y: 0.0,
                 w: content_w,
                 h: content_h,
-                color: terminal::ColorRgb { r: 22, g: 22, b: 29 }, // Kanagawa sumiInk0
-                alpha: 0.78,
+                color: terminal::ColorRgb { r: 14, g: 14, b: 18 },
+                alpha: 0.92,
             });
             bg_rects.push(terminal::BgRect {
                 x: card_x + 8.0,
                 y: card_y + 10.0,
                 w: card_w,
                 h: card_h,
-                color: terminal::ColorRgb { r: 12, g: 12, b: 18 },
-                alpha: 0.50,
+                color: terminal::ColorRgb { r: 8, g: 8, b: 12 },
+                alpha: 0.60,
             });
             bg_rects.push(terminal::BgRect {
                 x: card_x,
                 y: card_y,
                 w: card_w,
                 h: card_h,
-                color: terminal::ColorRgb { r: 24, g: 24, b: 32 }, // Kanagawa sumiInk1
-                alpha: 0.98,
+                color: terminal::ColorRgb {
+                    r: self.theme.tab_bar.r,
+                    g: self.theme.tab_bar.g,
+                    b: self.theme.tab_bar.b,
+                },
+                alpha: 1.0,
             });
             bg_rects.push(terminal::BgRect {
                 x: card_x,
@@ -738,6 +794,165 @@ impl GpuState {
                     },
                 });
             }
+        }
+
+        // 4g. Settings & Configuration Hub Modal Overlay (Gear button / Ctrl+,)
+        let s_card_w = super::SETTINGS_MODAL_WIDTH.min(content_w - 24.0);
+        let s_card_h = super::SETTINGS_MODAL_HEIGHT.min(content_h - 24.0);
+        let s_card_x = (content_w - s_card_w) * 0.5;
+        let s_card_y = (content_h - s_card_h) * 0.5;
+
+        if self.settings_visible {
+            bg_rects.push(terminal::BgRect {
+                x: 0.0,
+                y: 0.0,
+                w: content_w,
+                h: content_h,
+                color: terminal::ColorRgb {
+                    r: self.theme.tab_bar.r,
+                    g: self.theme.tab_bar.g,
+                    b: self.theme.tab_bar.b,
+                },
+                alpha: 0.92,
+            });
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x + 8.0,
+                y: s_card_y + 10.0,
+                w: s_card_w,
+                h: s_card_h,
+                color: terminal::ColorRgb { r: 8, g: 8, b: 12 },
+                alpha: 0.60,
+            });
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x,
+                y: s_card_y,
+                w: s_card_w,
+                h: s_card_h,
+                color: terminal::ColorRgb {
+                    r: self.theme.tab_bar.r,
+                    g: self.theme.tab_bar.g,
+                    b: self.theme.tab_bar.b,
+                },
+                alpha: 1.0,
+            });
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x,
+                y: s_card_y,
+                w: s_card_w,
+                h: 3.5,
+                color: terminal::ColorRgb {
+                    r: self.theme.syntax_type.r,
+                    g: self.theme.syntax_type.g,
+                    b: self.theme.syntax_type.b,
+                },
+                alpha: 1.0,
+            });
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x,
+                y: s_card_y + 3.5,
+                w: 1.0,
+                h: s_card_h - 3.5,
+                color: terminal::ColorRgb {
+                    r: self.theme.border.r,
+                    g: self.theme.border.g,
+                    b: self.theme.border.b,
+                },
+                alpha: 0.85,
+            });
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x + s_card_w - 1.0,
+                y: s_card_y + 3.5,
+                w: 1.0,
+                h: s_card_h - 3.5,
+                color: terminal::ColorRgb {
+                    r: self.theme.border.r,
+                    g: self.theme.border.g,
+                    b: self.theme.border.b,
+                },
+                alpha: 0.85,
+            });
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x,
+                y: s_card_y + s_card_h - 1.0,
+                w: s_card_w,
+                h: 1.0,
+                color: terminal::ColorRgb {
+                    r: self.theme.border.r,
+                    g: self.theme.border.g,
+                    b: self.theme.border.b,
+                },
+                alpha: 0.85,
+            });
+
+            // Active row highlight (accurately positioned using font line_height)
+            let line_h = self.text_engine.line_height;
+            let item_y = s_card_y + 16.0 + (4.0 + self.settings_selected_index as f32 * 2.0) * line_h;
+            let sel_row_y = item_y - 2.0;
+            let sel_row_h = line_h + 4.0;
+
+            // Highlight background bar
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x + 12.0,
+                y: sel_row_y,
+                w: s_card_w - 24.0,
+                h: sel_row_h,
+                color: terminal::ColorRgb {
+                    r: self.theme.selection.r,
+                    g: self.theme.selection.g,
+                    b: self.theme.selection.b,
+                },
+                alpha: 0.35,
+            });
+
+            // Accent indicator bar on the left edge of selected row
+            bg_rects.push(terminal::BgRect {
+                x: s_card_x + 12.0,
+                y: sel_row_y,
+                w: 3.5,
+                h: sel_row_h,
+                color: terminal::ColorRgb {
+                    r: self.theme.syntax_keyword.r,
+                    g: self.theme.syntax_keyword.g,
+                    b: self.theme.syntax_keyword.b,
+                },
+                alpha: 0.95,
+            });
+
+            // Close button [✕]
+            let close_x = s_card_x + s_card_w - 32.0;
+            let close_y = s_card_y + 8.0;
+            let is_close_hovered = content_mouse[0] >= close_x
+                && content_mouse[0] <= close_x + 24.0
+                && content_mouse[1] >= close_y
+                && content_mouse[1] <= close_y + 24.0;
+            bg_rects.push(terminal::BgRect {
+                x: close_x,
+                y: close_y,
+                w: 24.0,
+                h: 24.0,
+                color: if is_close_hovered {
+                    terminal::ColorRgb { r: 195, g: 64, b: 67 }
+                } else {
+                    terminal::ColorRgb {
+                        r: self.theme.tab_active.r,
+                        g: self.theme.tab_active.g,
+                        b: self.theme.tab_active.b,
+                    }
+                },
+                alpha: if is_close_hovered { 0.95 } else { 0.70 },
+            });
+            bg_rects.push(terminal::BgRect {
+                x: close_x + 6.0,
+                y: close_y + 11.0,
+                w: 12.0,
+                h: 2.0,
+                color: terminal::ColorRgb {
+                    r: self.theme.fg.r,
+                    g: self.theme.fg.g,
+                    b: self.theme.fg.b,
+                },
+                alpha: 0.95,
+            });
         }
 
         // Upload background, decorations, and cursor quads via reusable scratch buffer
@@ -966,8 +1181,21 @@ impl GpuState {
                 let bar_y = py + ph - bar_h - 6.0;
 
                 let (status_text, status_color) = if vi.in_search_input {
+                    let match_info = if vi.search_matches.is_empty() {
+                        if vi.search_query.is_empty() {
+                            String::new()
+                        } else {
+                            " [No matches]".to_string()
+                        }
+                    } else {
+                        format!(
+                            " [{}/{}] (Enter: next, Shift+Enter: prev, Esc: exit)",
+                            vi.active_match_idx.map_or(1, |i| i + 1),
+                            vi.search_matches.len()
+                        )
+                    };
                     (
-                        format!(" /{} [{}]", vi.search_query, vi.search_matches.len()),
+                        format!(" 🔍 Find: {}{}", vi.search_query, match_info),
                         terminal::ColorRgb { r: 230, g: 195, b: 132 },
                     )
                 } else {
@@ -1042,6 +1270,25 @@ impl GpuState {
             });
         }
 
+        if self.settings_visible {
+            let padding_top = 16.0;
+            let padding_bottom = 14.0;
+            areas.push(glyphon::TextArea {
+                buffer: &self.settings_buffer,
+                left: s_card_x + 16.0,
+                top: s_card_y + padding_top,
+                scale: 1.0,
+                bounds: glyphon::TextBounds {
+                    left: (s_card_x + 10.0) as i32,
+                    top: (s_card_y + padding_top) as i32,
+                    right: (s_card_x + s_card_w - 20.0) as i32,
+                    bottom: (s_card_y + s_card_h - padding_bottom) as i32,
+                },
+                default_color: glyphon::Color::rgb(self.theme.fg.r, self.theme.fg.g, self.theme.fg.b),
+                custom_glyphs: &[],
+            });
+        }
+
         self.text_engine
             .prepare_areas(&self.device, &self.queue, areas);
 
@@ -1050,9 +1297,9 @@ impl GpuState {
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.resize(self.window.inner_size());
-                return;
+                return true;
             }
-            _ => return,
+            _ => return true,
         };
 
         let view = output
@@ -1103,7 +1350,6 @@ impl GpuState {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(if self.is_maximized {
-                            // sumiInk0 #16161D (linearised on sRGB targets)
                             let lin = |c: f32| {
                                 if self.text_engine.srgb_target {
                                     crate::render::srgb_to_linear(c)
@@ -1112,9 +1358,9 @@ impl GpuState {
                                 }
                             };
                             wgpu::Color {
-                                r: lin(22.0 / 255.0) as f64,
-                                g: lin(22.0 / 255.0) as f64,
-                                b: lin(29.0 / 255.0) as f64,
+                                r: lin(self.theme.tab_bar.r as f32 / 255.0) as f64,
+                                g: lin(self.theme.tab_bar.g as f32 / 255.0) as f64,
+                                b: lin(self.theme.tab_bar.b as f32 / 255.0) as f64,
                                 a: 1.0,
                             }
                         } else {
@@ -1158,5 +1404,6 @@ impl GpuState {
         } else {
             self.next_blink_frame = None;
         }
+        true
     }
 }

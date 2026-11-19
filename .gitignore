@@ -1,1 +1,26 @@
+# Rust build artifacts
 /target
+**/*.rs.bk
+
+# Installer folder & installer scripts (requested by user)
+installer/
+dist/
+install*.ps1
+install*.bat
+install*.sh
+build_installer*.ps1
+*.iss
+
+# Operating System files
+Thumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Editor & IDE artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.log

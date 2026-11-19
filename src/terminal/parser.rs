@@ -1,6 +1,6 @@
 //! ANSI/VT100 escape sequence parser (`vte::Perform`) with stack-allocated SGR and row recycling.
 
-use super::cell::{ansi_16_color, color_256, Cell, CellStyle, ColorRgb, CursorShape};
+use super::cell::{color_256, Cell, CellStyle, ColorRgb, CursorShape};
 use super::TerminalGrid;
 use unicode_width::UnicodeWidthChar;
 use vte::{Params, Perform};
@@ -66,7 +66,8 @@ impl TerminalGrid {
                     i += 1;
                 }
                 30..=37 => {
-                    self.current_style.fg = Some(ansi_16_color((params[i] - 30) as usize));
+                    let idx = (params[i] - 30) as usize;
+                    self.current_style.fg = Some(self.palette[idx.min(15)]);
                     i += 1;
                 }
                 39 => {
@@ -74,7 +75,8 @@ impl TerminalGrid {
                     i += 1;
                 }
                 40..=47 => {
-                    self.current_style.bg = Some(ansi_16_color((params[i] - 40) as usize));
+                    let idx = (params[i] - 40) as usize;
+                    self.current_style.bg = Some(self.palette[idx.min(15)]);
                     i += 1;
                 }
                 49 => {
@@ -82,11 +84,13 @@ impl TerminalGrid {
                     i += 1;
                 }
                 90..=97 => {
-                    self.current_style.fg = Some(ansi_16_color((params[i] - 90 + 8) as usize));
+                    let idx = (params[i] - 90 + 8) as usize;
+                    self.current_style.fg = Some(self.palette[idx.min(15)]);
                     i += 1;
                 }
                 100..=107 => {
-                    self.current_style.bg = Some(ansi_16_color((params[i] - 100 + 8) as usize));
+                    let idx = (params[i] - 100 + 8) as usize;
+                    self.current_style.bg = Some(self.palette[idx.min(15)]);
                     i += 1;
                 }
                 38 => {
@@ -311,6 +315,40 @@ impl Perform for TerminalGrid {
                 }
             } else {
                 self.current_hyperlink_idx = 0;
+            }
+        } else if params[0] == b"10" {
+            // OSC 10: Foreground Color Query (OSC 10 ; ? ST)
+            if params.len() >= 2 && params[1] == b"?" {
+                // Kanagawa fujiWhite (#dcd7ba)
+                self.responses.push(b"\x1b]10;rgb:dc00/d700/ba00\x1b\\".to_vec());
+            }
+        } else if params[0] == b"11" {
+            // OSC 11: Background Color Query (OSC 11 ; ? ST)
+            if params.len() >= 2 && params[1] == b"?" {
+                // Kanagawa sumiInk1 (#1f1f28)
+                self.responses.push(b"\x1b]11;rgb:1f00/1f00/2800\x1b\\".to_vec());
+            }
+        } else if params[0] == b"12" {
+            // OSC 12: Cursor Color Query (OSC 12 ; ? ST)
+            if params.len() >= 2 && params[1] == b"?" {
+                // Kanagawa springBlue (#7fb4ca)
+                self.responses.push(b"\x1b]12;rgb:7f00/b400/ca00\x1b\\".to_vec());
+            }
+        } else if params[0] == b"52" {
+            // OSC 52: Clipboard Manipulation: OSC 52 ; Pc ; Pd ST
+            if params.len() >= 3 {
+                if params[2] == b"?" {
+                    if let Some(text) = crate::platform::clipboard::get_text() {
+                        let encoded = crate::terminal::graphics::encode_base64(text.as_bytes());
+                        let target = std::str::from_utf8(params[1]).unwrap_or("c");
+                        let resp = format!("\x1b]52;{};{}\x1b\\", target, encoded);
+                        self.responses.push(resp.into_bytes());
+                    }
+                } else if let Some(decoded) = crate::terminal::graphics::decode_base64(params[2]) {
+                    if let Ok(text) = String::from_utf8(decoded) {
+                        crate::platform::clipboard::set_text(&text);
+                    }
+                }
             }
         }
     }
@@ -570,21 +608,15 @@ impl Perform for TerminalGrid {
                         for r in 0..self.rows {
                             self.cells[r].fill(Cell::default());
                         }
-                        self.cursor_x = 0;
-                        self.cursor_y = 0;
+                        // ECMA-48 / VT100: CSI 2 J erases display without resetting cursor
                         self.graphics.images.clear();
                     }
                     3 => {
-                        for r in 0..self.rows {
-                            self.cells[r].fill(Cell::default());
-                        }
+                        // xterm / VT: CSI 3 J erases saved lines (scrollback buffer only)
                         self.scrollback.clear();
                         self.scroll_offset = 0;
                         self.target_scroll_y = 0.0;
                         self.current_scroll_y = 0.0;
-                        self.cursor_x = 0;
-                        self.cursor_y = 0;
-                        self.graphics.images.clear();
                     }
                     _ => {}
                 }

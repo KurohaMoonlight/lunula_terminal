@@ -406,6 +406,33 @@ pub fn decode_base64(input: &[u8]) -> Option<Vec<u8>> {
     Some(output)
 }
 
+const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Robust zero-dependency Base64 encoder (RFC 4648).
+pub fn encode_base64(input: &[u8]) -> String {
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(B64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(B64_CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(B64_CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 /// Self-contained PNG decoder using `yazi::decompress` for RFC 1950 zlib stream.
 ///
 /// Returns `(width, height, rgba_data)`.
@@ -601,6 +628,11 @@ mod tests {
         let input = b"aGVsbG8gd29ybGQ=";
         let decoded = decode_base64(input).unwrap();
         assert_eq!(&decoded, b"hello world");
+
+        let encoded = encode_base64(b"hello world");
+        assert_eq!(encoded, "aGVsbG8gd29ybGQ=");
+        let roundtrip = decode_base64(encoded.as_bytes()).unwrap();
+        assert_eq!(&roundtrip, b"hello world");
 
         let input_multiline = b"aGVs\r\nbG8=\n";
         let decoded2 = decode_base64(input_multiline).unwrap();

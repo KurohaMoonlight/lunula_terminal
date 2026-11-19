@@ -70,7 +70,7 @@ impl Pane {
             b: config.cursor.color[2],
         };
 
-        let pty = PtyManager::new(cols, rows, proxy)?;
+        let pty = PtyManager::new(cols, rows, proxy, &config.shell)?;
         let buffer = text_engine.create_buffer();
 
         Ok(Self {

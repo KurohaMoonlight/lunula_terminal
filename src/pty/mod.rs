@@ -29,6 +29,7 @@ impl PtyManager {
         cols: u16,
         rows: u16,
         proxy: EventLoopProxy<()>,
+        shell_cfg: &crate::config::ShellConfig,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let pty_system = native_pty_system();
         let size = PtySize {
@@ -40,9 +41,11 @@ impl PtyManager {
 
         let pair = pty_system.openpty(size)?;
 
-        // Default to powershell.exe on Windows
-        let mut cmd = CommandBuilder::new("powershell.exe");
-        cmd.arg("-NoLogo");
+        // Launch configured shell with fallback
+        let mut cmd = CommandBuilder::new(&shell_cfg.program);
+        for arg in &shell_cfg.args {
+            cmd.arg(arg);
+        }
 
         // Ensure built-in `luna.exe` and `lfetch.exe` (next to lunula_terminal.exe) are automatically on PATH
         let mut lfetch_exe_opt = None;
@@ -63,11 +66,14 @@ impl PtyManager {
         cmd.env("TERM_PROGRAM", "lunula_terminal");
         cmd.env("TERM", "xterm-256color");
 
-        // Auto-launch lfetch on startup if found
+        // Auto-launch lfetch on startup if found and running PowerShell
         if let Some(lfetch_path) = lfetch_exe_opt {
-            cmd.arg("-NoExit");
-            cmd.arg("-Command");
-            cmd.arg(format!("& '{}'", lfetch_path.display()));
+            let prog_lower = shell_cfg.program.to_lowercase();
+            if prog_lower.contains("powershell") || prog_lower.contains("pwsh") {
+                cmd.arg("-NoExit");
+                cmd.arg("-Command");
+                cmd.arg(format!("& '{}'", lfetch_path.display()));
+            }
         }
 
         // Direct local IPC bridge for binary-safe protocol passthrough (e.g. Kitty Graphics via limg)

@@ -8,6 +8,10 @@ pub const DEFAULT_LUA_CONFIG: &str = r##"-- ====================================
 -- ==========================================================
 
 return {
+    -- Pilihan tema tampilan terminal & luna editor:
+    -- "kanagawa" (default), "tokyo_night", "catppuccin", "gruvbox", "nord"
+    theme = "kanagawa",
+
     window = {
         -- Lebar & tinggi: "auto" atau angka pixel (e.g. 1100, 700)
         -- Jika "auto", Lunula otomatis menyesuaikan resolusi monitor aktif.
@@ -75,6 +79,118 @@ return {
         animation = 1,
         -- Mode default: true = animasi interaktif live, false = cetak 1 frame instan (< 5ms)
         live = true,
+    },
+    shell = {
+        -- Program shell utama (e.g. "powershell.exe", "pwsh.exe", "cmd.exe", "wsl.exe", "bash.exe")
+        program = "powershell.exe",
+        -- Argumen tambahan shell
+        args = { "-NoLogo" },
+    },
+}
+"##;
+
+pub const DEFAULT_COLORS_LUA: &str = r##"-- ==========================================================
+--  Lunula Terminal - Custom Colors & 16-Color ANSI Palette
+--  (colors.lua)
+-- ==========================================================
+
+return {
+    -- Override warna UI utama (jika diisi, menimpa theme aktif):
+    -- background = "#1F1F28",
+    -- foreground = "#DCD7BA",
+    -- selection  = "#2D4F67",
+    -- cursor     = "#7FB4CA",
+    -- tab_bar    = "#16161D",
+    -- border     = "#363646",
+
+    -- 16 ANSI Palette Colors (0..15):
+    -- Menentukan warna output perintah CLI di shell (ls, git, htop, dll.)
+    ansi = {
+        [0]  = "#16161D", -- Black (sumiInk0)
+        [1]  = "#C34043", -- Red (autumnRed)
+        [2]  = "#76946A", -- Green (autumnGreen)
+        [3]  = "#C0A36E", -- Yellow (boatYellow1)
+        [4]  = "#7E9CD8", -- Blue (crystalBlue)
+        [5]  = "#957FB8", -- Magenta (oniViolet)
+        [6]  = "#6A9589", -- Cyan (waveAqua1)
+        [7]  = "#C8C093", -- White (oldWhite)
+        [8]  = "#727169", -- Bright Black (fujiGray)
+        [9]  = "#E82424", -- Bright Red (samuraiRed)
+        [10] = "#98BB6C", -- Bright Green (springGreen)
+        [11] = "#E6C384", -- Bright Yellow (boatYellow2)
+        [12] = "#7FB4CA", -- Bright Blue (springBlue)
+        [13] = "#D27E99", -- Bright Magenta (sakuraPink)
+        [14] = "#7AA89F", -- Bright Cyan (waveAqua2)
+        [15] = "#DCD7BA", -- Bright White (fujiWhite)
+    },
+}
+"##;
+
+pub const DEFAULT_KEYBINDS_LUA: &str = r##"-- ==========================================================
+--  Lunula Terminal - Keyboard Shortcuts Configuration
+--  (keybinds.lua)
+-- ==========================================================
+
+return {
+    -- Format: ["Shortcut"] = "Action"
+    -- Actions: "new_tab", "close_pane", "next_tab", "prev_tab",
+    --          "split_vertical", "split_horizontal", "search",
+    --          "reload_config", "toggle_fullscreen", "toggle_help", "toggle_settings"
+
+    ["Ctrl+Shift+T"]   = "new_tab",
+    ["Ctrl+Shift+W"]   = "close_pane",
+    ["Ctrl+Tab"]       = "next_tab",
+    ["Ctrl+Shift+Tab"] = "prev_tab",
+    ["Ctrl+Shift+E"]   = "split_vertical",
+    ["Ctrl+Shift+D"]   = "split_horizontal",
+    ["Ctrl+Shift+F"]   = "search",
+    ["Ctrl+Shift+R"]   = "reload_config",
+    ["Ctrl+Shift+H"]   = "toggle_help",
+    ["Ctrl+,"]         = "toggle_settings",
+    ["F11"]            = "toggle_fullscreen",
+}
+"##;
+
+pub const DEFAULT_CYBERPUNK_THEME_LUA: &str = r##"-- ==========================================================
+--  Custom Theme: Cyberpunk Neon
+--  (themes/cyberpunk.lua)
+-- ==========================================================
+
+return {
+    name = "cyberpunk",
+    bg = "#0f051d",
+    fg = "#00ff9f",
+    selection = "#ff007f",
+    cursor = "#00e5ff",
+    tab_bar = "#090212",
+    tab_active = "#1e0b36",
+    border = "#ff007f",
+    syntax = {
+        keyword = "#ff007f",
+        type = "#00e5ff",
+        string = "#ffe600",
+        number = "#ff8c00",
+        comment = "#5c5670",
+        punctuation = "#e0e0e0",
+        header = "#ff007f",
+    },
+    ansi = {
+        [0]  = "#0f051d",
+        [1]  = "#ff0055",
+        [2]  = "#00ff9f",
+        [3]  = "#ffe600",
+        [4]  = "#00e5ff",
+        [5]  = "#ff007f",
+        [6]  = "#00ffff",
+        [7]  = "#ffffff",
+        [8]  = "#5c5670",
+        [9]  = "#ff2a6d",
+        [10] = "#05d9e8",
+        [11] = "#ffea00",
+        [12] = "#00f0ff",
+        [13] = "#f706cf",
+        [14] = "#01f9c6",
+        [15] = "#fdfdfd",
     },
 }
 "##;

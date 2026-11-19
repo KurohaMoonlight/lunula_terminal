@@ -154,12 +154,18 @@ impl TabManager {
     }
 
     pub fn active_pane(&self) -> Option<&Pane> {
-        let pane_id = self.active_tab().active_pane_id;
+        if self.tabs.is_empty() || self.active_tab_index >= self.tabs.len() {
+            return None;
+        }
+        let pane_id = self.tabs[self.active_tab_index].active_pane_id;
         self.panes.get(&pane_id)
     }
 
     pub fn active_pane_mut(&mut self) -> Option<&mut Pane> {
-        let pane_id = self.active_tab().active_pane_id;
+        if self.tabs.is_empty() || self.active_tab_index >= self.tabs.len() {
+            return None;
+        }
+        let pane_id = self.tabs[self.active_tab_index].active_pane_id;
         self.panes.get_mut(&pane_id)
     }
 
@@ -552,7 +558,7 @@ impl TabManager {
                 }
             }
         }
-        true
+        !self.tabs.is_empty()
     }
 }
 

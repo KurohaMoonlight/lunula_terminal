@@ -1,6 +1,8 @@
-//! Kanagawa Wave ANSI/TrueColor TUI renderer for `luna`.
+//! Multi-theme ANSI/TrueColor TUI renderer for `luna`.
 
 use super::buffer::TextBuffer;
+use super::syntax::{self, Language};
+use crate::theme::Theme;
 use std::io::{self, BufWriter, Write};
 use unicode_width::UnicodeWidthStr;
 
@@ -16,10 +18,11 @@ pub fn render(
     rows: usize,
     status_msg: &str,
     prompt: &PromptMode,
+    theme: &Theme,
 ) -> io::Result<()> {
     let stdout = io::stdout();
     let mut out = BufWriter::with_capacity(8192, stdout.lock());
-    render_to(buf, cols, rows, status_msg, prompt, &mut out)?;
+    render_to(buf, cols, rows, status_msg, prompt, theme, &mut out)?;
     out.flush()?;
     Ok(())
 }
@@ -30,6 +33,7 @@ pub fn render_to<W: Write>(
     rows: usize,
     status_msg: &str,
     prompt: &PromptMode,
+    theme: &Theme,
     out: &mut W,
 ) -> io::Result<()> {
     let rows_safe = rows.max(4);
@@ -41,10 +45,11 @@ pub fn render_to<W: Write>(
     // Hide cursor while drawing frame
     out.write_all(b"\x1b[?25l")?;
 
-    // 1. Top Header Bar (Row 1): Kanagawa sumiInk0 #16161D + springBlue #7fb4ca
-    // Position explicitly with absolute row coordinates (no trailing \r\n to prevent viewport scrolling)
+    // 1. Top Header Bar (Row 1): Styled using active theme
+    let lang = Language::from_path(buf.path.as_deref());
     let modified_tag = if buf.dirty { " [Modified]" } else { "" };
-    let left_title = format!("  🌙 LUNA  │  {}{}", buf.filename_display(), modified_tag);
+    let lang_tag = lang.display_tag();
+    let left_title = format!("  🌙 LUNA  │  {}{}{}", buf.filename_display(), modified_tag, lang_tag);
     let right_pos = format!(
         "Ln {}, Col {}  ",
         buf.cursor_row + 1,
@@ -54,10 +59,18 @@ pub fn render_to<W: Write>(
     let right_w = UnicodeWidthStr::width(right_pos.as_str());
     let pad = cols.saturating_sub(left_w + right_w);
 
+    let bg_code = theme.tab_bar.to_bg_ansi();
+    let fg_code = theme.fg.to_fg_ansi();
+    let title_code = theme.cursor.to_fg_ansi();
+
     write!(
         out,
-        "\x1b[1;1H\x1b[48;2;22;22;29m\x1b[38;2;127;180;202m\x1b[1m{}\x1b[0m\x1b[48;2;22;22;29m\x1b[38;2;200;192;147m{}{}\x1b[K\x1b[0m",
+        "\x1b[1;1H{}{}\x1b[1m{}\x1b[0m{}{}{}{}\x1b[K\x1b[0m",
+        bg_code,
+        title_code,
         left_title,
+        bg_code,
+        fg_code,
         " ".repeat(pad),
         right_pos
     )?;
@@ -74,30 +87,30 @@ pub fn render_to<W: Write>(
             if is_active_line {
                 write!(
                     out,
-                    "\x1b[38;2;230;195;132m\x1b[1m{:>width$} \x1b[0m\x1b[38;2;54;54;70m│ \x1b[0m",
+                    "{}\x1b[1m{:>width$} \x1b[0m{}│ \x1b[0m",
+                    theme.gutter_active.to_fg_ansi(),
                     line_idx + 1,
+                    theme.border.to_fg_ansi(),
                     width = total_lines_digits
                 )?;
             } else {
                 write!(
                     out,
-                    "\x1b[38;2;114;113;105m{:>width$} \x1b[38;2;54;54;70m│ \x1b[0m",
+                    "{}{:>width$} \x1b[0m{}│ \x1b[0m",
+                    theme.gutter_fg.to_fg_ansi(),
                     line_idx + 1,
+                    theme.border.to_fg_ansi(),
                     width = total_lines_digits
                 )?;
             }
 
             let line = &buf.lines[line_idx];
-            let visible: String = line
-                .chars()
-                .skip(buf.scroll_col)
-                .take(text_cols)
-                .collect();
-            write!(out, "\x1b[38;2;220;215;186m{}\x1b[K\x1b[0m", visible)?;
+            syntax::render_highlighted_line(line, lang, buf.scroll_col, text_cols, theme, out)?;
         } else {
             write!(
                 out,
-                "\x1b[38;2;54;54;70m{:>width$} │ ~\x1b[K\x1b[0m",
+                "{}{:>width$} │ ~\x1b[K\x1b[0m",
+                theme.border.to_fg_ansi(),
                 "",
                 width = total_lines_digits
             )?;
@@ -111,7 +124,10 @@ pub fn render_to<W: Write>(
         PromptMode::Search(query) => {
             write!(
                 out,
-                "\x1b[48;2;45;79;103m\x1b[38;2;230;195;132m Search: \x1b[38;2;220;215;186m{}\x1b[K\x1b[0m",
+                "{}{} Search: {}{}\x1b[K\x1b[0m",
+                theme.selection.to_bg_ansi(),
+                theme.gutter_active.to_fg_ansi(),
+                theme.fg.to_fg_ansi(),
                 query
             )?;
         }
@@ -124,17 +140,35 @@ pub fn render_to<W: Write>(
         PromptMode::None => {
             write!(
                 out,
-                "\x1b[48;2;31;31;40m\x1b[38;2;152;187;108m {}\x1b[K\x1b[0m",
+                "{}{} {}\x1b[K\x1b[0m",
+                theme.bg.to_bg_ansi(),
+                theme.syntax_string.to_fg_ansi(),
                 status_msg
             )?;
         }
     }
 
     // 4. Bottom Shortcut Legend (Row rows_safe)
+    let bar_bg = theme.tab_bar.to_bg_ansi();
+    let key_fg = theme.syntax_type.to_fg_ansi();
+    let lbl_fg = theme.fg.to_fg_ansi();
     write!(
         out,
-        "\x1b[{};1H\x1b[48;2;22;22;29m\x1b[38;2;127;180;202m ^S \x1b[38;2;200;192;147mSave   \x1b[38;2;127;180;202m^X \x1b[38;2;200;192;147mExit   \x1b[38;2;127;180;202m^F \x1b[38;2;200;192;147mFind   \x1b[38;2;127;180;202m^Z \x1b[38;2;200;192;147mUndo\x1b[K\x1b[0m",
-        rows_safe
+        "\x1b[{};1H{}{} ^S {}{}Save   {}^X {}{}Exit   {}^F {}{}Find   {}^Z {}{}Undo\x1b[K\x1b[0m",
+        rows_safe,
+        bar_bg,
+        key_fg,
+        bar_bg,
+        lbl_fg,
+        key_fg,
+        bar_bg,
+        lbl_fg,
+        key_fg,
+        bar_bg,
+        lbl_fg,
+        key_fg,
+        bar_bg,
+        lbl_fg
     )?;
 
     // Position terminal cursor
@@ -172,7 +206,8 @@ mod tests {
     fn test_render_no_viewport_scrolling_newlines() {
         let buf = TextBuffer::open(None).unwrap();
         let mut out = Vec::new();
-        render_to(&buf, 80, 24, "Ready", &PromptMode::None, &mut out).unwrap();
+        let theme = Theme::kanagawa();
+        render_to(&buf, 80, 24, "Ready", &PromptMode::None, &theme, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
 
         // Ensure there are no newlines in the rendered output that would scroll the terminal viewport

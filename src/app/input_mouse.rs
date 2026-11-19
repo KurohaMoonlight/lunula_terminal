@@ -20,7 +20,7 @@ impl GpuState {
 
         if self.help_visible {
             let content_h = self.wobble.content_size[1] as f32;
-            let card_h = 580.0f32.min(content_h - 24.0);
+            let card_h = super::HELP_MODAL_HEIGHT.min(content_h - 24.0);
             let visible_h = card_h - 32.0;
             let max_scroll = (self.help_total_height - visible_h).max(0.0);
             self.help_scroll_y = (self.help_scroll_y - delta_y).clamp(0.0, max_scroll);
@@ -99,7 +99,7 @@ impl GpuState {
             self.window.request_redraw();
         } else if self.help_visible && self.help_dragging_scrollbar {
             let content_h = self.wobble.content_size[1] as f32;
-            let card_h = 580.0f32.min(content_h - 24.0);
+            let card_h = super::HELP_MODAL_HEIGHT.min(content_h - 24.0);
             let card_y = (content_h - card_h) * 0.5;
             let visible_h = card_h - 32.0;
             let max_scroll = (self.help_total_height - visible_h).max(0.0);
@@ -246,14 +246,7 @@ impl GpuState {
                         return;
                     }
                     WindowControlAction::Settings => {
-                        let active_tab = self.tab_manager.active_tab();
-                        let active_pane_id = active_tab.active_pane_id;
-                        if let Some(pane) = self.tab_manager.panes.get_mut(&active_pane_id) {
-                            let cmd = format!("luna \"{}\"\r\n", self.config_path.display());
-                            pane.pty.write_bytes(cmd.as_bytes());
-                            self.drain_pty();
-                            self.window.request_redraw();
-                        }
+                        self.toggle_settings();
                         return;
                     }
                     WindowControlAction::Drag => {
@@ -274,9 +267,50 @@ impl GpuState {
                             let content_w = self.wobble.content_size[0] as f32;
                             let content_h = self.wobble.content_size[1] as f32;
 
+                            if self.settings_visible {
+                                let card_w = super::SETTINGS_MODAL_WIDTH.min(content_w - 24.0);
+                                let card_h = super::SETTINGS_MODAL_HEIGHT.min(content_h - 24.0);
+                                let card_x = (content_w - card_w) * 0.5;
+                                let card_y = (content_h - card_h) * 0.5;
+                                let close_x = card_x + card_w - 32.0;
+                                let close_y = card_y + 8.0;
+
+                                let in_close = cx >= close_x
+                                    && cx <= close_x + 24.0
+                                    && cy >= close_y
+                                    && cy <= close_y + 24.0;
+                                let outside_card = cx < card_x
+                                    || cx > card_x + card_w
+                                    || cy < card_y
+                                    || cy > card_y + card_h;
+
+                                if in_close || outside_card {
+                                    self.settings_visible = false;
+                                    self.window.request_redraw();
+                                    return;
+                                }
+
+                                let line_h = self.text_engine.line_height;
+                                let item_start_y = card_y + 16.0 + 4.0 * line_h;
+                                if cx >= card_x + 10.0
+                                    && cx <= card_x + card_w - 10.0
+                                    && cy >= item_start_y - 4.0
+                                    && cy < item_start_y + 6.0 * (2.0 * line_h)
+                                {
+                                    let rel_y = cy - (item_start_y - 4.0);
+                                    let item_idx = (rel_y / (2.0 * line_h)) as usize;
+                                    if item_idx < 6 {
+                                        self.settings_selected_index = item_idx;
+                                        self.execute_settings_action(item_idx);
+                                        return;
+                                    }
+                                }
+                                return;
+                            }
+
                             if self.help_visible {
-                                let card_w = 660.0f32.min(content_w - 24.0);
-                                let card_h = 580.0f32.min(content_h - 24.0);
+                                let card_w = super::HELP_MODAL_WIDTH.min(content_w - 24.0);
+                                let card_h = super::HELP_MODAL_HEIGHT.min(content_h - 24.0);
                                 let card_x = (content_w - card_w) * 0.5;
                                 let card_y = (content_h - card_h) * 0.5;
                                 let close_x = card_x + card_w - 32.0;

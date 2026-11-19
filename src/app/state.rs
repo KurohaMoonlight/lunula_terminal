@@ -26,6 +26,8 @@ pub struct GpuState {
     pub config_path: std::path::PathBuf,
     pub last_config_check: Instant,
     pub last_config_modified: Option<std::time::SystemTime>,
+    pub last_keybinds_modified: Option<std::time::SystemTime>,
+    pub last_colors_modified: Option<std::time::SystemTime>,
     pub active_window_title: String,
 
     pub is_maximized: bool,
@@ -48,6 +50,11 @@ pub struct GpuState {
     pub help_scroll_y: f32,
     pub help_total_height: f32,
     pub help_dragging_scrollbar: bool,
+
+    pub settings_visible: bool,
+    pub settings_selected_index: usize,
+    pub settings_buffer: glyphon::Buffer,
+    pub settings_total_height: f32,
 
     pub bar_center_buffer: glyphon::Buffer,
     pub bar_clock_buffer: glyphon::Buffer,
@@ -78,10 +85,13 @@ pub struct GpuState {
     pub high_fps_animating: bool,
     pub next_blink_frame: Option<Instant>,
     pub initial_trim_frames: u8,
+    pub should_exit: bool,
+    pub theme: crate::theme::Theme,
 }
 
 impl GpuState {
     pub async fn new(window: Arc<Window>, config: LunulaConfig, proxy: EventLoopProxy<()>) -> Self {
+        window.set_ime_allowed(true);
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -192,14 +202,57 @@ impl GpuState {
 
         let win_pos = window.outer_position().unwrap_or_default();
         let win_size = window.inner_size();
-        let config_path = LunulaConfig::find_config_path()
-            .unwrap_or_else(|| std::path::PathBuf::from("lunula.lua"));
+        let config_path = LunulaConfig::find_config_path();
         let last_config_modified = std::fs::metadata(&config_path)
             .ok()
             .and_then(|m| m.modified().ok());
+        let config_dir_opt = config_path.parent();
+        let last_keybinds_modified = config_dir_opt
+            .and_then(|dir| std::fs::metadata(dir.join("keybinds.lua")).ok())
+            .and_then(|m| m.modified().ok());
+        let last_colors_modified = config_dir_opt
+            .and_then(|dir| std::fs::metadata(dir.join("colors.lua")).ok())
+            .and_then(|m| m.modified().ok());
+
+        let mut theme = crate::theme::Theme::from_name(&config.theme);
+        if config.colors.selection != [45, 79, 103] {
+            theme.selection = crate::theme::ColorRgb::new(
+                config.colors.selection[0],
+                config.colors.selection[1],
+                config.colors.selection[2],
+            );
+        }
+        if let Some(bg) = config.colors.background {
+            theme.bg = crate::theme::ColorRgb::new(bg[0], bg[1], bg[2]);
+        }
+        if let Some(fg) = config.colors.foreground {
+            theme.fg = crate::theme::ColorRgb::new(fg[0], fg[1], fg[2]);
+        }
 
         let mut help_buffer = text_engine.create_buffer();
-        let help_total_height = build_help_buffer(&mut text_engine, &mut help_buffer);
+        let help_total_height = build_help_buffer(
+            &mut text_engine,
+            &mut help_buffer,
+            &config.keybinds,
+            &theme,
+        );
+
+        let mut settings_buffer = text_engine.create_buffer();
+
+        let config_dir_str = config_path
+            .parent()
+            .map(|p| {
+                let s = p.display().to_string();
+                s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+            })
+            .unwrap_or_else(|| ".".to_string());
+        let settings_total_height = super::settings_modal::build_settings_buffer(
+            &mut text_engine,
+            &mut settings_buffer,
+            0,
+            &theme,
+            &config_dir_str,
+        );
 
         let bar_center_buffer = text_engine.create_buffer();
         let bar_clock_buffer = text_engine.create_buffer();
@@ -225,8 +278,11 @@ impl GpuState {
             tab_manager,
             config,
             config_path,
+            theme,
             last_config_check: Instant::now(),
             last_config_modified,
+            last_keybinds_modified,
+            last_colors_modified,
             active_window_title: String::new(),
             is_maximized: false,
             is_focused: true,
@@ -247,6 +303,10 @@ impl GpuState {
             help_scroll_y: 0.0,
             help_total_height,
             help_dragging_scrollbar: false,
+            settings_visible: false,
+            settings_selected_index: 0,
+            settings_buffer,
+            settings_total_height,
             bar_center_buffer,
             bar_clock_buffer,
             bar_gear_buffer,
@@ -274,21 +334,146 @@ impl GpuState {
             high_fps_animating: false,
             next_blink_frame: None,
             initial_trim_frames: 0,
+            should_exit: false,
         }
     }
 
     pub fn toggle_help(&mut self) {
         self.help_visible = !self.help_visible;
         if self.help_visible {
+            self.settings_visible = false;
             self.help_scroll_y = 0.0;
             self.help_dragging_scrollbar = false;
         }
         self.window.request_redraw();
     }
 
+    pub fn toggle_settings(&mut self) {
+        self.settings_visible = !self.settings_visible;
+        if self.settings_visible {
+            self.help_visible = false;
+            self.update_settings_buffer();
+        }
+        self.window.request_redraw();
+    }
+
+    pub fn update_settings_buffer(&mut self) {
+        let config_dir_str = self
+            .config_path
+            .parent()
+            .map(|p| {
+                let s = p.display().to_string();
+                s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+            })
+            .unwrap_or_else(|| ".".to_string());
+        self.settings_total_height = super::settings_modal::build_settings_buffer(
+            &mut self.text_engine,
+            &mut self.settings_buffer,
+            self.settings_selected_index,
+            &self.theme,
+            &config_dir_str,
+        );
+    }
+
+    pub fn execute_settings_action(&mut self, idx: usize) {
+        self.settings_visible = false;
+        let config_dir = self
+            .config_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        let luna_exe = crate::config::LunulaConfig::get_luna_exe();
+
+        match idx {
+            0 => {
+                let path = self.config_path.clone();
+                self.open_file_in_luna(&path, &luna_exe);
+            }
+            1 => {
+                let colors_path = config_dir.join("colors.lua");
+                if !colors_path.exists() {
+                    let _ = std::fs::write(&colors_path, crate::config::DEFAULT_COLORS_LUA);
+                }
+                self.open_file_in_luna(&colors_path, &luna_exe);
+            }
+            2 => {
+                let keybinds_path = config_dir.join("keybinds.lua");
+                if !keybinds_path.exists() {
+                    let _ = std::fs::write(&keybinds_path, crate::config::DEFAULT_KEYBINDS_LUA);
+                }
+                self.open_file_in_luna(&keybinds_path, &luna_exe);
+            }
+            3 => {
+                let themes_dir = config_dir.join("themes");
+                if !themes_dir.exists() {
+                    let _ = std::fs::create_dir_all(&themes_dir);
+                    let _ = std::fs::write(
+                        themes_dir.join("cyberpunk.lua"),
+                        crate::config::DEFAULT_CYBERPUNK_THEME_LUA,
+                    );
+                }
+                let _ = std::process::Command::new("explorer.exe")
+                    .arg(&themes_dir)
+                    .spawn();
+            }
+            4 => {
+                self.reload_config();
+            }
+            5 => {
+                let _ = std::process::Command::new("explorer.exe")
+                    .arg(config_dir)
+                    .spawn();
+            }
+            _ => {}
+        }
+        self.window.request_redraw();
+    }
+
+    pub fn open_file_in_luna(
+        &mut self,
+        file_path: &std::path::Path,
+        luna_exe: &std::path::Path,
+    ) {
+        let active_tab = self.tab_manager.active_tab();
+        let active_pane_id = active_tab.active_pane_id;
+        if let Some(pane) = self.tab_manager.panes.get_mut(&active_pane_id) {
+            let abs_file = file_path
+                .canonicalize()
+                .unwrap_or_else(|_| file_path.to_path_buf());
+            let abs_luna = luna_exe
+                .canonicalize()
+                .unwrap_or_else(|_| luna_exe.to_path_buf());
+
+            let is_ps = self.config.shell.program.contains("powershell")
+                || self.config.shell.program.contains("pwsh");
+            let cmd = if is_ps {
+                format!("& \"{}\" \"{}\"\r\n", abs_luna.display(), abs_file.display())
+            } else {
+                format!("\"{}\" \"{}\"\r\n", abs_luna.display(), abs_file.display())
+            };
+            pane.pty.write_bytes(cmd.as_bytes());
+            self.drain_pty();
+        }
+    }
+
     pub fn reload_config(&mut self) {
         let new_cfg = LunulaConfig::load();
         self.config = new_cfg.clone();
+
+        let mut theme = crate::theme::Theme::from_name(&new_cfg.theme);
+        if new_cfg.colors.selection != [45, 79, 103] {
+            theme.selection = crate::theme::ColorRgb::new(
+                new_cfg.colors.selection[0],
+                new_cfg.colors.selection[1],
+                new_cfg.colors.selection[2],
+            );
+        }
+        if let Some(bg) = new_cfg.colors.background {
+            theme.bg = crate::theme::ColorRgb::new(bg[0], bg[1], bg[2]);
+        }
+        if let Some(fg) = new_cfg.colors.foreground {
+            theme.fg = crate::theme::ColorRgb::new(fg[0], fg[1], fg[2]);
+        }
+        self.theme = theme;
 
         self.wobble.stiffness = new_cfg.wobble.stiffness;
         self.wobble.damping = new_cfg.wobble.damping;
@@ -297,7 +482,18 @@ impl GpuState {
         self.wobble.opacity = new_cfg.window.opacity;
         self.wobble.mesh_dirty = true;
 
+        let pal_raw = self.theme.ansi_16_raw();
+        let mut term_palette = [crate::terminal::ColorRgb { r: 0, g: 0, b: 0 }; 16];
+        for i in 0..16 {
+            term_palette[i] = crate::terminal::ColorRgb {
+                r: pal_raw[i][0],
+                g: pal_raw[i][1],
+                b: pal_raw[i][2],
+            };
+        }
+
         for pane in self.tab_manager.panes.values_mut() {
+            pane.terminal.set_palette(term_palette);
             pane.terminal.selection_color = terminal::ColorRgb {
                 r: new_cfg.colors.selection[0],
                 g: new_cfg.colors.selection[1],
@@ -331,6 +527,7 @@ impl GpuState {
                 self.text_engine.line_height,
             );
             self.help_buffer.set_metrics(new_metrics);
+            self.settings_buffer.set_metrics(new_metrics);
             self.bar_center_buffer.set_metrics(new_metrics);
             self.bar_clock_buffer.set_metrics(new_metrics);
             self.bar_gear_buffer.set_metrics(new_metrics);
@@ -344,14 +541,19 @@ impl GpuState {
                 pane.buffer.set_metrics(new_metrics);
                 pane.terminal.mark_all_rows_dirty();
             }
-            self.help_total_height =
-                build_help_buffer(&mut self.text_engine, &mut self.help_buffer);
             self.bar_center_dirty = true;
             self.bar_icons_dirty = true;
             self.last_time_str.clear();
             self.resize(self.window.inner_size());
         }
 
+        self.help_total_height = build_help_buffer(
+            &mut self.text_engine,
+            &mut self.help_buffer,
+            &self.config.keybinds,
+            &self.theme,
+        );
+        self.update_settings_buffer();
         self.window.request_redraw();
     }
 
@@ -375,7 +577,7 @@ impl GpuState {
                 .layout(content_w, content_h, &mut self.text_engine, &self.config);
             self.last_win_pos = self.window.outer_position().unwrap_or_default();
 
-            let card_h = 580.0f32.min(content_h - 24.0);
+            let card_h = super::HELP_MODAL_HEIGHT.min(content_h - 24.0);
             let visible_h = card_h - 32.0;
             let max_scroll = (self.help_total_height - visible_h).max(0.0);
             self.help_scroll_y = self.help_scroll_y.clamp(0.0, max_scroll);
@@ -410,15 +612,23 @@ impl GpuState {
         self.window.request_redraw();
     }
 
-    pub fn drain_pty(&mut self) {
+    pub fn drain_pty(&mut self) -> bool {
+        if self.should_exit || self.tab_manager.tabs.is_empty() {
+            self.should_exit = true;
+            return false;
+        }
+
         let content_w = self.wobble.content_size[0] as f32;
         let content_h = self.wobble.content_size[1] as f32;
-        let _ = self.tab_manager.reap_exited_panes(
+        if !self.tab_manager.reap_exited_panes(
             content_w,
             content_h,
             &mut self.text_engine,
             &self.config,
-        );
+        ) || self.tab_manager.tabs.is_empty() {
+            self.should_exit = true;
+            return false;
+        }
         let _changed = self
             .tab_manager
             .drain_all_ptys(&mut self.text_engine, &self.config);
@@ -430,6 +640,7 @@ impl GpuState {
                     .set_title(&format!("Lunula - {}", self.active_window_title));
             }
         }
+        true
     }
 
     /// Periodically checks if `lunula.lua` or `.git/HEAD` changed when a user interaction occurs.
@@ -437,17 +648,53 @@ impl GpuState {
         let now = Instant::now();
         if now.duration_since(self.last_config_check).as_millis() > 1000 {
             self.last_config_check = now;
+            let mut should_reload = false;
+
             if let Ok(meta) = std::fs::metadata(&self.config_path) {
                 if let Ok(modified) = meta.modified() {
                     if let Some(prev) = self.last_config_modified {
                         if modified > prev {
                             self.last_config_modified = Some(modified);
-                            self.reload_config();
+                            should_reload = true;
                         }
                     } else {
                         self.last_config_modified = Some(modified);
                     }
                 }
+            }
+
+            if let Some(config_dir) = self.config_path.parent() {
+                let keybinds_path = config_dir.join("keybinds.lua");
+                if let Ok(meta) = std::fs::metadata(&keybinds_path) {
+                    if let Ok(modified) = meta.modified() {
+                        if let Some(prev) = self.last_keybinds_modified {
+                            if modified > prev {
+                                self.last_keybinds_modified = Some(modified);
+                                should_reload = true;
+                            }
+                        } else {
+                            self.last_keybinds_modified = Some(modified);
+                        }
+                    }
+                }
+
+                let colors_path = config_dir.join("colors.lua");
+                if let Ok(meta) = std::fs::metadata(&colors_path) {
+                    if let Ok(modified) = meta.modified() {
+                        if let Some(prev) = self.last_colors_modified {
+                            if modified > prev {
+                                self.last_colors_modified = Some(modified);
+                                should_reload = true;
+                            }
+                        } else {
+                            self.last_colors_modified = Some(modified);
+                        }
+                    }
+                }
+            }
+
+            if should_reload {
+                self.reload_config();
             }
         }
 

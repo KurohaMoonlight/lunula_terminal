@@ -3,7 +3,9 @@
 pub mod defaults;
 pub mod types;
 
-pub use defaults::DEFAULT_LUA_CONFIG;
+pub use defaults::{
+    DEFAULT_COLORS_LUA, DEFAULT_CYBERPUNK_THEME_LUA, DEFAULT_KEYBINDS_LUA, DEFAULT_LUA_CONFIG,
+};
 pub use types::*;
 
 use defaults::parse_color_value;
@@ -12,18 +14,27 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 impl LunulaConfig {
-    /// Searches standard locations for `lunula.lua` or `config.lua`.
-    pub fn find_config_path() -> Option<PathBuf> {
+    /// Searches standard locations for `lunula.lua` or `config.lua` and returns canonical absolute path.
+    pub fn find_config_path() -> PathBuf {
         let local = Path::new("lunula.lua");
         if local.exists() {
-            return Some(local.to_path_buf());
+            if let Ok(canon) = local.canonicalize() {
+                return canon;
+            }
+            if let Ok(cur) = std::env::current_dir() {
+                return cur.join("lunula.lua");
+            }
+            return local.to_path_buf();
         }
 
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(parent) = exe_path.parent() {
                 let exe_local = parent.join("lunula.lua");
                 if exe_local.exists() {
-                    return Some(exe_local);
+                    if let Ok(canon) = exe_local.canonicalize() {
+                        return canon;
+                    }
+                    return exe_local;
                 }
             }
         }
@@ -31,7 +42,10 @@ impl LunulaConfig {
         if let Ok(appdata) = std::env::var("APPDATA") {
             let appdata_cfg = Path::new(&appdata).join("lunula").join("config.lua");
             if appdata_cfg.exists() {
-                return Some(appdata_cfg);
+                if let Ok(canon) = appdata_cfg.canonicalize() {
+                    return canon;
+                }
+                return appdata_cfg;
             }
         }
 
@@ -41,24 +55,54 @@ impl LunulaConfig {
                 .join("lunula")
                 .join("config.lua");
             if user_cfg.exists() {
-                return Some(user_cfg);
+                if let Ok(canon) = user_cfg.canonicalize() {
+                    return canon;
+                }
+                return user_cfg;
             }
         }
 
-        None
+        if let Ok(cur) = std::env::current_dir() {
+            return cur.join("lunula.lua");
+        }
+
+        PathBuf::from("lunula.lua")
+    }
+
+    /// Returns the absolute folder path containing `lunula.lua`.
+    #[allow(dead_code)]
+    pub fn get_config_dir() -> PathBuf {
+        let cfg = Self::find_config_path();
+        cfg.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// Finds absolute path of `luna.exe` companion, falling back to PATH `"luna"`.
+    pub fn get_luna_exe() -> PathBuf {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let candidate = dir.join("luna.exe");
+                if candidate.exists() {
+                    return candidate;
+                }
+                let candidate2 = dir.join("luna");
+                if candidate2.exists() {
+                    return candidate2;
+                }
+            }
+        }
+        PathBuf::from("luna")
     }
 
     /// Loads `lunula.lua` from disk, or generates the default configuration file if missing.
     pub fn load() -> Self {
-        let config_path = match Self::find_config_path() {
-            Some(path) => path,
-            None => {
-                let _ = fs::write("lunula.lua", DEFAULT_LUA_CONFIG);
-                PathBuf::from("lunula.lua")
-            }
-        };
+        let config_path = Self::find_config_path();
+        if !config_path.exists() {
+            let _ = fs::write(&config_path, DEFAULT_LUA_CONFIG);
+        }
 
-        match fs::read_to_string(&config_path) {
+        let mut config = match fs::read_to_string(&config_path) {
             Ok(script) => match Self::parse_lua(&script) {
                 Ok(cfg) => {
                     log::info!("Loaded configuration from {}", config_path.display());
@@ -77,6 +121,36 @@ impl LunulaConfig {
                 log::warn!("Could not read configuration file: {}. Using default.", err);
                 Self::default()
             }
+        };
+
+        // Companion keybinds.lua loader
+        if let Some(config_dir) = config_path.parent() {
+            let keybinds_path = config_dir.join("keybinds.lua");
+            if keybinds_path.exists() {
+                if let Ok(content) = fs::read_to_string(&keybinds_path) {
+                    Self::parse_keybinds_content(&content, &mut config.keybinds);
+                }
+            }
+        }
+
+        config
+    }
+
+    /// Fast parser for keybindings content from Lua script.
+    pub fn parse_keybinds_content(content: &str, keybinds: &mut KeybindsConfig) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("--") {
+                continue;
+            }
+            let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let k = parts[0].trim().trim_matches(|c| c == '[' || c == ']' || c == '"' || c == '\'');
+                let v = parts[1].trim().trim_matches(|c| c == ',' || c == ';' || c == ' ' || c == '"' || c == '\'');
+                if !k.is_empty() && !v.is_empty() {
+                    apply_keybind_pair(keybinds, k, v);
+                }
+            }
         }
     }
 
@@ -88,6 +162,12 @@ impl LunulaConfig {
         let mut config = Self::default();
 
         if let Value::Table(table) = value {
+            if let Ok(theme_str) = table.get::<String>("theme") {
+                if !theme_str.trim().is_empty() {
+                    config.theme = theme_str;
+                }
+            }
+
             if let Ok(w_val) = table.get::<Table>("window") {
                 if let Ok(val) = w_val.get::<Value>("width") {
                     match val {
@@ -206,6 +286,12 @@ impl LunulaConfig {
                         config.colors.selection = rgb;
                     }
                 }
+                if let Ok(val) = c_val.get::<Value>("background") {
+                    config.colors.background = parse_color_value(&val);
+                }
+                if let Ok(val) = c_val.get::<Value>("foreground") {
+                    config.colors.foreground = parse_color_value(&val);
+                }
             }
 
             if let Ok(f_val) = table.get::<Table>("fetch") {
@@ -218,10 +304,80 @@ impl LunulaConfig {
                     config.fetch.live = live;
                 }
             }
+
+            if let Ok(s_val) = table.get::<Table>("shell") {
+                if let Ok(prog) = s_val.get::<String>("program") {
+                    if !prog.trim().is_empty() {
+                        config.shell.program = prog;
+                    }
+                }
+                if let Ok(args_table) = s_val.get::<Table>("args") {
+                    let mut parsed_args = Vec::new();
+                    for val in args_table.sequence_values::<String>() {
+                        if let Ok(arg) = val {
+                            parsed_args.push(arg);
+                        }
+                    }
+                    config.shell.args = parsed_args;
+                }
+            }
+
+            if let Ok(kb_val) = table.get::<Table>("keybinds") {
+                for pair in kb_val.pairs::<String, String>() {
+                    if let Ok((k, v)) = pair {
+                        apply_keybind_pair(&mut config.keybinds, &k, &v);
+                    }
+                }
+            }
         }
 
         Ok(config)
     }
+}
+
+fn apply_keybind_pair(keybinds: &mut KeybindsConfig, k: &str, v: &str) {
+    let k_clean = k.trim();
+    let v_clean = v.trim();
+
+    let (action, shortcut) = if is_known_action(v_clean) {
+        (v_clean, k_clean)
+    } else {
+        (k_clean, v_clean)
+    };
+
+    match action.to_lowercase().as_str() {
+        "new_tab" => keybinds.new_tab = shortcut.to_string(),
+        "close_pane" => keybinds.close_pane = shortcut.to_string(),
+        "next_tab" => keybinds.next_tab = shortcut.to_string(),
+        "prev_tab" => keybinds.prev_tab = shortcut.to_string(),
+        "split_vertical" => keybinds.split_vertical = shortcut.to_string(),
+        "split_horizontal" => keybinds.split_horizontal = shortcut.to_string(),
+        "search" => keybinds.search = shortcut.to_string(),
+        "reload_config" => keybinds.reload_config = shortcut.to_string(),
+        "reload_profile" => keybinds.reload_profile = shortcut.to_string(),
+        "toggle_help" => keybinds.toggle_help = shortcut.to_string(),
+        "toggle_settings" => keybinds.toggle_settings = shortcut.to_string(),
+        "toggle_fullscreen" => keybinds.toggle_fullscreen = shortcut.to_string(),
+        _ => {}
+    }
+}
+
+fn is_known_action(act: &str) -> bool {
+    matches!(
+        act.to_lowercase().as_str(),
+        "new_tab"
+            | "close_pane"
+            | "next_tab"
+            | "prev_tab"
+            | "split_vertical"
+            | "split_horizontal"
+            | "search"
+            | "reload_config"
+            | "reload_profile"
+            | "toggle_help"
+            | "toggle_settings"
+            | "toggle_fullscreen"
+    )
 }
 
 #[cfg(test)]
@@ -255,9 +411,12 @@ mod tests {
             cursor = { shape = "beam", blinking = false, color = "#ff79c6" },
             colors = { selection = "#ff5577" },
             fetch = { animation = 2, live = false },
+            shell = { program = "pwsh.exe", args = { "-NoProfile" } },
         }
         "##;
         let cfg = LunulaConfig::parse_lua(script).expect("parse custom");
+        assert_eq!(cfg.shell.program, "pwsh.exe");
+        assert_eq!(cfg.shell.args, vec!["-NoProfile"]);
         assert_eq!(cfg.window.width, Some(1280));
         assert_eq!(cfg.window.height, Some(720));
         assert!(cfg.window.lock_size);

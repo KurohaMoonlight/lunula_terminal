@@ -141,12 +141,16 @@ impl Default for TabsConfig {
 #[derive(Clone, Debug)]
 pub struct ColorsConfig {
     pub selection: [u8; 3],
+    pub background: Option<[u8; 3]>,
+    pub foreground: Option<[u8; 3]>,
 }
 
 impl Default for ColorsConfig {
     fn default() -> Self {
         Self {
             selection: [45, 79, 103], // Kanagawa waveBlue2 (#2d4f67)
+            background: None,
+            foreground: None,
         }
     }
 }
@@ -166,8 +170,164 @@ impl Default for FetchConfig {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeybindsConfig {
+    pub new_tab: String,
+    pub close_pane: String,
+    pub next_tab: String,
+    pub prev_tab: String,
+    pub split_vertical: String,
+    pub split_horizontal: String,
+    pub search: String,
+    pub reload_config: String,
+    pub reload_profile: String,
+    pub toggle_help: String,
+    pub toggle_settings: String,
+    pub toggle_fullscreen: String,
+}
+
+impl Default for KeybindsConfig {
+    fn default() -> Self {
+        Self {
+            new_tab: "Ctrl+Shift+T".to_string(),
+            close_pane: "Ctrl+Shift+W".to_string(),
+            next_tab: "Ctrl+Tab".to_string(),
+            prev_tab: "Ctrl+Shift+Tab".to_string(),
+            split_vertical: "Ctrl+Shift+E".to_string(),
+            split_horizontal: "Ctrl+Shift+D".to_string(),
+            search: "Ctrl+Shift+F".to_string(),
+            reload_config: "Ctrl+Shift+R".to_string(),
+            reload_profile: "Ctrl+Shift+P".to_string(),
+            toggle_help: "Shift+F1".to_string(),
+            toggle_settings: "Ctrl+,".to_string(),
+            toggle_fullscreen: "F11".to_string(),
+        }
+    }
+}
+
+pub fn matches_shortcut(
+    shortcut_str: &str,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    code_opt: Option<winit::keyboard::KeyCode>,
+    ch_opt: Option<char>,
+) -> bool {
+    let parts: Vec<&str> = shortcut_str.split('+').map(|s| s.trim()).collect();
+    if parts.is_empty() {
+        return false;
+    }
+
+    let mut req_ctrl = false;
+    let mut req_shift = false;
+    let mut req_alt = false;
+    let mut key_part = "";
+
+    for part in parts {
+        let lower = part.to_lowercase();
+        match lower.as_str() {
+            "ctrl" | "control" => req_ctrl = true,
+            "shift" => req_shift = true,
+            "alt" => req_alt = true,
+            _ => key_part = part,
+        }
+    }
+
+    if req_ctrl != ctrl || req_shift != shift || req_alt != alt {
+        return false;
+    }
+
+    let key_lower = key_part.to_lowercase();
+    match key_lower.as_str() {
+        "tab" => code_opt == Some(winit::keyboard::KeyCode::Tab) || ch_opt == Some('\t'),
+        "f1" => code_opt == Some(winit::keyboard::KeyCode::F1),
+        "f11" => code_opt == Some(winit::keyboard::KeyCode::F11),
+        "escape" | "esc" => {
+            code_opt == Some(winit::keyboard::KeyCode::Escape) || ch_opt == Some('\x1b')
+        }
+        "enter" | "return" => {
+            code_opt == Some(winit::keyboard::KeyCode::Enter)
+                || code_opt == Some(winit::keyboard::KeyCode::NumpadEnter)
+                || ch_opt == Some('\r')
+                || ch_opt == Some('\n')
+        }
+        "," | "comma" => {
+            ch_opt == Some(',') || code_opt == Some(winit::keyboard::KeyCode::Comma)
+        }
+        "space" => {
+            code_opt == Some(winit::keyboard::KeyCode::Space) || ch_opt == Some(' ')
+        }
+        single if single.chars().count() == 1 => {
+            let target_char = single.chars().next().unwrap();
+            if let Some(c) = ch_opt {
+                if c.to_ascii_lowercase() == target_char.to_ascii_lowercase() {
+                    return true;
+                }
+                // Handle ASCII control characters when Ctrl is held (1..=26 -> 'a'..='z')
+                let byte = c as u32;
+                if (1..=26).contains(&byte) {
+                    let ctrl_char = (b'a' + (byte as u8) - 1) as char;
+                    if ctrl_char == target_char.to_ascii_lowercase() {
+                        return true;
+                    }
+                }
+            }
+            if target_char.is_ascii_alphabetic() {
+                match target_char.to_ascii_uppercase() {
+                    'A' => code_opt == Some(winit::keyboard::KeyCode::KeyA),
+                    'B' => code_opt == Some(winit::keyboard::KeyCode::KeyB),
+                    'C' => code_opt == Some(winit::keyboard::KeyCode::KeyC),
+                    'D' => code_opt == Some(winit::keyboard::KeyCode::KeyD),
+                    'E' => code_opt == Some(winit::keyboard::KeyCode::KeyE),
+                    'F' => code_opt == Some(winit::keyboard::KeyCode::KeyF),
+                    'G' => code_opt == Some(winit::keyboard::KeyCode::KeyG),
+                    'H' => code_opt == Some(winit::keyboard::KeyCode::KeyH),
+                    'I' => code_opt == Some(winit::keyboard::KeyCode::KeyI),
+                    'J' => code_opt == Some(winit::keyboard::KeyCode::KeyJ),
+                    'K' => code_opt == Some(winit::keyboard::KeyCode::KeyK),
+                    'L' => code_opt == Some(winit::keyboard::KeyCode::KeyL),
+                    'M' => code_opt == Some(winit::keyboard::KeyCode::KeyM),
+                    'N' => code_opt == Some(winit::keyboard::KeyCode::KeyN),
+                    'O' => code_opt == Some(winit::keyboard::KeyCode::KeyO),
+                    'P' => code_opt == Some(winit::keyboard::KeyCode::KeyP),
+                    'Q' => code_opt == Some(winit::keyboard::KeyCode::KeyQ),
+                    'R' => code_opt == Some(winit::keyboard::KeyCode::KeyR),
+                    'S' => code_opt == Some(winit::keyboard::KeyCode::KeyS),
+                    'T' => code_opt == Some(winit::keyboard::KeyCode::KeyT),
+                    'U' => code_opt == Some(winit::keyboard::KeyCode::KeyU),
+                    'V' => code_opt == Some(winit::keyboard::KeyCode::KeyV),
+                    'W' => code_opt == Some(winit::keyboard::KeyCode::KeyW),
+                    'X' => code_opt == Some(winit::keyboard::KeyCode::KeyX),
+                    'Y' => code_opt == Some(winit::keyboard::KeyCode::KeyY),
+                    'Z' => code_opt == Some(winit::keyboard::KeyCode::KeyZ),
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ShellConfig {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            program: "powershell.exe".to_string(),
+            args: vec!["-NoLogo".to_string()],
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct LunulaConfig {
+    pub theme: String,
     pub window: WindowConfig,
     pub wobble: WobbleConfig,
     pub terminal: TerminalConfig,
@@ -175,5 +335,44 @@ pub struct LunulaConfig {
     pub scroll: ScrollConfig,
     pub tabs: TabsConfig,
     pub colors: ColorsConfig,
+    pub keybinds: KeybindsConfig,
     pub fetch: FetchConfig,
+    pub shell: ShellConfig,
+}
+
+impl Default for LunulaConfig {
+    fn default() -> Self {
+        Self {
+            theme: "kanagawa".to_string(),
+            window: WindowConfig::default(),
+            wobble: WobbleConfig::default(),
+            terminal: TerminalConfig::default(),
+            cursor: CursorConfig::default(),
+            scroll: ScrollConfig::default(),
+            tabs: TabsConfig::default(),
+            colors: ColorsConfig::default(),
+            keybinds: KeybindsConfig::default(),
+            fetch: FetchConfig::default(),
+            shell: ShellConfig::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::KeyCode;
+
+    #[test]
+    fn test_matches_shortcut_basic() {
+        assert!(matches_shortcut("Ctrl+Shift+T", true, true, false, Some(KeyCode::KeyT), None));
+        assert!(matches_shortcut("Ctrl+Shift+T", true, true, false, None, Some('t')));
+        assert!(matches_shortcut("Ctrl+Shift+T", true, true, false, None, Some('\x14')));
+        assert!(!matches_shortcut("Ctrl+Shift+T", true, false, false, Some(KeyCode::KeyT), None));
+        assert!(matches_shortcut("Ctrl+,", true, false, false, Some(KeyCode::Comma), None));
+        assert!(matches_shortcut("Shift+F1", false, true, false, Some(KeyCode::F1), None));
+        assert!(matches_shortcut("F11", false, false, false, Some(KeyCode::F11), None));
+        assert!(matches_shortcut("Ctrl+Tab", true, false, false, Some(KeyCode::Tab), None));
+        assert!(matches_shortcut("Ctrl+Shift+Tab", true, true, false, Some(KeyCode::Tab), None));
+    }
 }
