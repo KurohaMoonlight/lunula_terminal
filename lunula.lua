@@ -37,6 +37,8 @@ return {
         font_family = "0xProto Nerd Font Mono", -- Font monospace/nerd font (auto-fallback jika tidak ditemukan)
         font_size = 18,
         max_scrollback = 5000,
+        -- Keamanan: Izinkan aplikasi PTY/remote membaca clipboard host via OSC 52 query (default: false demi keamanan)
+        allow_clipboard_read = false,
     },
     cursor = {
         -- Bentuk kursor default: "block", "beam", atau "underline"

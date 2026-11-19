@@ -155,17 +155,25 @@ impl TerminalGrid {
                 ch = ' ';
             }
 
+            let mut ch_str = String::with_capacity(4);
+            ch_str.push(ch);
+            if let Some(extras) = self.combining_chars.get(&(abs_r, c)) {
+                for &extra_c in extras {
+                    ch_str.push(extra_c);
+                }
+            }
+
             // Group consecutive matching styles
             if cur_text.is_empty() {
                 cur_style = eff_style;
-                cur_text.push(ch);
+                cur_text.push_str(&ch_str);
             } else if cur_style == eff_style {
-                cur_text.push(ch);
+                cur_text.push_str(&ch_str);
             } else {
                 spans.push((cur_text, cur_style));
                 cur_style = eff_style;
                 cur_text = String::with_capacity(end - c);
-                cur_text.push(ch);
+                cur_text.push_str(&ch_str);
             }
         }
 

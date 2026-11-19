@@ -1,26 +1,26 @@
-# 🧰 Program Pendamping CLI Bawaan (*CLI Companions*)
+# 🧰 Built-in CLI Companion Utilities
 
-Lunula Terminal hadir dengan rangkaian program utilitas mandiri (*companion binaries*) yang dirancang khusus untuk memaksimalkan kapabilitas GPU terminal tanpa memerlukan dependensi pihak ketiga yang berat:
+Lunula Terminal ships with a lightweight suite of companion CLI utilities designed to harness the terminal's GPU capabilities without heavy external runtime dependencies:
 
 ---
 
 ## 1. 🌙 `lfetch` — 3D Raymarched Terminal Fetch Tool
 
-`lfetch` adalah alternatif *ultra-lightweight* untuk `neofetch` / `fastfetch` yang menampilkan informasi sistem (OS, Kernel, CPU, GPU, Memori, Uptime, Resolusi) disertai render ASCII 3D beranimasi halus:
+`lfetch` is an ultra-lightweight alternative to `neofetch` / `fastfetch` that displays comprehensive system telemetry (OS, Kernel, CPU, GPU, Memory, Uptime, Screen Resolution) alongside a smooth animated 3D ASCII render:
 
-### Mode Tampilan:
-- **Mode 1**: 3D Raymarched Moon & Great Wave Kanagawa (ombak bergulung dengan buih air dinamis).
-- **Mode 2**: 3D Analytical Moon berotasi dengan kalkulasi iluminasi kawah dan gelombang laut Kanagawa.
+### Animation Modes:
+* **Mode 1**: 3D Raymarched Moon & Great Wave of Kanagawa (rolling wave physics with procedural foam).
+* **Mode 2**: 3D Analytical Rotating Moon with calculated crater lighting and oceanic waves.
 
-### Penggunaan CLI:
+### CLI Usage:
 ```bash
-# Menjalankan animasi live 60 FPS di terminal (tekan q untuk keluar)
+# Run 60 FPS live interactive animation (press 'q' to exit)
 lfetch
 
-# Menampilkan 1 frame statis secara instan (<5 ms) cocok untuk startup shell di $PROFILE
+# Output 1 static frame instantly (<5 ms) — ideal for PowerShell/Bash startup profiles
 lfetch --static
 
-# Memilih variasi animasi secara manual (1 atau 2)
+# Select animation variant manually (1 or 2)
 lfetch --anim 1
 lfetch --anim 2
 ```
@@ -29,19 +29,19 @@ lfetch --anim 2
 
 ## 2. 🖼️ `limg` — Inline Terminal Graphics Viewer
 
-`limg` adalah alat penampil gambar langsung di dalam terminal (*inline graphics viewer*) yang menggunakan protokol modern **Kitty Graphics Protocol** (APC / DCS G) yang diakselerasi langsung oleh GPU Lunula:
+`limg` is a high-performance inline image viewer utilizing the modern **Kitty Graphics Protocol** (APC / DCS G) accelerated directly by Lunula's WGPU pipeline:
 
-### Keunggulan:
-- Mendukung format gambar **PNG**, **JPEG**, dan buffer piksel mentah RGBA.
-- Otomatis menyesuaikan aspek rasio gambar terhadap ukuran sel karakter teks di terminal.
-- Gambar dapat di-scroll secara halus mengikuti riwayat scrollback terminal tanpa merusak tata letak teks.
+### Capabilities:
+* Supports **PNG**, **JPEG**, and raw RGBA pixel buffers.
+* Automatically scales image aspect ratios to match character cell dimensions.
+* Inline images scroll seamlessly with terminal history without corrupting text layouts.
 
-### Penggunaan CLI:
+### CLI Usage:
 ```bash
-# Menampilkan gambar langsung di grid terminal
-limg gambar.png
+# Display an image directly in the terminal grid
+limg image.png
 
-# Menyesuaikan lebar maksimum (dalam sel kolom karakter)
+# Restrict maximum rendering width (in character columns)
 limg screenshot.jpg --cols 60
 ```
 
@@ -49,16 +49,16 @@ limg screenshot.jpg --cols 60
 
 ## 3. 📦 `lpm` — Lunula Package & Theme Manager
 
-`lpm` adalah utilitas baris perintah untuk mengelola tema kustom, plugin, dan validasi konfigurasi Lunula Terminal:
+`lpm` is a lightweight package manager for discovering, downloading, and installing community themes and extensions into `%APPDATA%\lunula\themes\`:
 
-### Penggunaan CLI:
+### CLI Usage:
 ```bash
-# Memeriksa integritas berkas konfigurasi lunula.lua
-lpm check
+# List installed local themes
+lpm list
 
-# Menampilkan daftar tema yang terpasang di folder themes/
-lpm themes list
+# Search for available community themes
+lpm search catppuccin
 
-# Menguji tema tertentu
-lpm themes preview cyberpunk
+# Install a theme directly into %APPDATA%\lunula\themes\
+lpm install tokyo_night
 ```

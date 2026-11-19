@@ -739,9 +739,7 @@ impl GpuState {
                         if let Some(url) =
                             pane.terminal.get_hyperlink_at(vi.cursor_col, vi.cursor_abs_row)
                         {
-                            let _ = std::process::Command::new("cmd")
-                                .args(["/c", "start", "", &url])
-                                .spawn();
+                            crate::platform::open_url_safely(&url);
                         }
                         self.window.request_redraw();
                         return;

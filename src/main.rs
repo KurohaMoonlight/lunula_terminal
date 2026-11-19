@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! Lunula Terminal — Ultra-lightweight GPU-accelerated terminal emulator.
 //!
 //! Entry point initializing logging, Lua configuration, and the Winit event loop.

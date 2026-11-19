@@ -1,62 +1,57 @@
-# 🔍 Panduan Pemecahan Masalah & Optimasi (*Troubleshooting*)
+# 🔍 Troubleshooting & Optimization Guide
 
-Dokumen ini berisi panduan penanganan masalah umum serta kiat optimasi saat menggunakan **Lunula Terminal**.
+This document provides solutions to common issues and optimization techniques when using **Lunula Terminal**.
 
 ---
 
-## 1. Ikon / Simbol Nerd Font Muncul Kotak-Kotak (Missing Glyphs)
+## 1. Missing Nerd Font Glyphs or Box Characters (Tofu)
 
-### Penyebab:
-Font yang digunakan di `lunula.lua` belum terpasang di sistem Windows Anda atau bukan varian *Nerd Font* (yang memuat glif khusus Powerline, Git branch, icon folder, dll.).
+### Cause:
+The font specified in `lunula.lua` is either not installed on your Windows machine or is not a patched *Nerd Font* (which contains special glyphs for Powerline symbols, Git branches, folder icons, etc.).
 
-### Solusi:
-1. Unduh font monospace bervarian Nerd Font (misalnya: **JetBrainsMono Nerd Font**, **0xProto Nerd Font Mono**, atau **FiraCode Nerd Font**) dari [Nerd Fonts Releases](https://www.nerdfonts.com/).
-2. Pasang font tersebut di Windows (klik kanan `.ttf` / `.otf` $\rightarrow$ *Install for all users*).
-3. Buka `lunula.lua` (via tombol Gear ⚙️ atau `Ctrl + ,`), lalu sesuaikan namanya:
+### Solution:
+1. Download a patched monospace Nerd Font (such as **JetBrainsMono Nerd Font**, **FiraCode Nerd Font**, or **CaskaydiaCove Nerd Font**) from [Nerd Fonts](https://www.nerdfonts.com/).
+2. Install the font on Windows (right-click the `.ttf` / `.otf` file $\rightarrow$ *Install for all users*).
+3. Open `lunula.lua` (via the Gear button `⚙️` or `Ctrl + ,`), and update the font family:
    ```lua
    terminal = {
-       font_family = "JetBrainsMono Nerd Font",
-       font_size = 16.0,
+       font_family = "JetBrainsMono Nerd Font, Cascadia Code, monospace",
+       font_size = 15.0,
    }
    ```
-4. Tekan `Ctrl + Shift + R` untuk memuat ulang konfigurasi.
+4. Save and press `Ctrl + Shift + R` to hot-reload the configuration.
 
 ---
 
-## 2. Menghemat Daya Baterai Laptop
+## 2. Maximizing Laptop Battery Life
 
-Secara default, Lunula Terminal menyalakan animasi gelombang ombak Kanagawa 60 FPS di titlebar dan fisika getaran jelly window. Di desktop atau saat dicolokkan ke adaptor daya, fitur ini menggunakan sangat sedikit daya GPU. Namun saat bepergian dengan baterai laptop, Anda dapat mengaktifkan profil hemat daya:
+By default, Lunula Terminal renders a 60 FPS Kanagawa wave animation in the title bar and simulates interactive 2D jelly window physics. On desktop workstations or plugged-in laptops, GPU power draw is negligible. When traveling on battery, you can activate the ultra-low-power profile:
 
-### Solusi Hemat Baterai di `lunula.lua`:
+### Battery Saver Settings in `lunula.lua`:
 ```lua
 window = {
-    animate_titlebar = false, -- Matikan animasi ombak live di titlebar (beralih ke idle wait mode)
+    animate_titlebar = false, -- Disables continuous title bar wave animation
 }
 wobble = {
-    wave_reactivity = 0.0,    -- Matikan reaktivitas ombak terhadap gerakan drag
+    stiffness = 500.0,
+    damping = 25.0,
 }
 ```
-Ketika `animate_titlebar = false`, Lunula Terminal akan memasuki mode tidur pulas (*event-driven wait*), menggunakan 0% CPU dan 0% GPU ketika tidak ada input ketikan atau output shell.
+When `animate_titlebar = false`, Lunula Terminal enters deep event-driven sleep (*WaitUntil idle mode*), utilizing **0% CPU and 0% GPU** whenever there is no active keyboard input or shell output.
 
 ---
 
-## 3. Karakter Khusus / Bahasa Asing (IME & Emojis)
+## 3. Special Characters, IME & Emojis
 
-Lunula Terminal mendukung penuh masukan teks Unicode, IME (Japanese, Chinese, Korean, dll.), dan pengetik emoji native Windows (`Win + .`):
-- Jendela IME dan kandidat kata otomatis diletakkan tepat di bawah posisi kursor aktif terminal.
-- Jika kursor berpindah, Lunula Terminal otomatis memperbarui area kursor IME ke Windows Subsystem.
+Lunula Terminal fully supports Unicode text input, complex IMEs (Japanese, Chinese, Korean, etc.), and native Windows emoji picker (`Win + .`):
+* The IME candidate window automatically positions itself directly beneath the active terminal cursor.
+* Cursor tracking updates IME candidate bounding boxes in real time across splits and tabs.
 
 ---
 
-## 4. Masalah Terminal Crash Saat Menjalankan Perintah Tertentu
+## 4. Resetting Configuration to Defaults
 
-### Diagnostik:
-Jalankan Lunula Terminal melalui Command Prompt atau PowerShell biasa untuk melihat log error:
-```powershell
-$env:RUST_LOG="info"
-.\target\release\lunula_terminal.exe
-```
-
-### Tips Umum:
-- Pastikan Windows 10/11 Anda memiliki ConPTY yang mutakhir (disertakan secara default di Windows 10 build 1809 ke atas).
-- Jika perintah shell keluar secara tiba-tiba, split pane otomatis menutup secara aman dan rapi tanpa menyebabkan crash memori.
+If configuration files become corrupted or unparseable:
+1. Delete or rename `%APPDATA%\lunula`.
+2. Launch Lunula Terminal again.
+3. Lunula automatically generates pristine default versions of `lunula.lua`, `colors.lua`, and `keybinds.lua`.

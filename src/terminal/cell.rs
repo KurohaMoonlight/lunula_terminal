@@ -81,6 +81,7 @@ pub const STYLE_UNDERLINE: u8 = 1 << 3;
 pub const STYLE_UNDERCURL: u8 = 1 << 4;
 pub const STYLE_STRIKETHROUGH: u8 = 1 << 5;
 pub const STYLE_REVERSE: u8 = 1 << 6;
+pub const STYLE_WRAPPED: u8 = 1 << 7;
 
 /// Compact 13-byte cell style packing all 7 boolean attributes into a single `u8` bitfield.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -224,6 +225,20 @@ impl CellStyle {
             self.flags |= STYLE_REVERSE;
         } else {
             self.flags &= !STYLE_REVERSE;
+        }
+    }
+
+    #[inline]
+    pub const fn wrapped(&self) -> bool {
+        (self.flags & STYLE_WRAPPED) != 0
+    }
+
+    #[inline]
+    pub fn set_wrapped(&mut self, val: bool) {
+        if val {
+            self.flags |= STYLE_WRAPPED;
+        } else {
+            self.flags &= !STYLE_WRAPPED;
         }
     }
 }

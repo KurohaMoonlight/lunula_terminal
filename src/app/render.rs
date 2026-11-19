@@ -485,6 +485,26 @@ impl GpuState {
                             ),
                             winit::dpi::PhysicalSize::new(cell_w.max(1.0) as u32, cell_h.max(1.0) as u32),
                         );
+
+                        if let Some((ref preedit_text, _)) = self.ime_preedit {
+                            let preedit_w = (preedit_text.chars().count() as f32 * cell_w).max(cell_w);
+                            bg_rects.push(terminal::BgRect {
+                                x: pane.cursor_head[0],
+                                y: pane.cursor_head[1],
+                                w: preedit_w,
+                                h: cell_h,
+                                color: terminal::ColorRgb { r: 45, g: 79, b: 103 },
+                                alpha: 0.85,
+                            });
+                            bg_rects.push(terminal::BgRect {
+                                x: pane.cursor_head[0],
+                                y: pane.cursor_head[1] + cell_h - 2.0,
+                                w: preedit_w,
+                                h: 2.0,
+                                color: terminal::ColorRgb { r: 127, g: 180, b: 202 },
+                                alpha: 1.0,
+                            });
+                        }
                     }
                 }
 
@@ -1246,6 +1266,36 @@ impl GpuState {
                         bottom: (bar_y + bar_h) as i32,
                     },
                     default_color: glyphon::Color::rgb(status_color.r, status_color.g, status_color.b),
+                    custom_glyphs: &[],
+                });
+            }
+        }
+
+        // 4h. IME composition preedit overlay text
+        if let Some((ref preedit_text, _)) = self.ime_preedit {
+            if let Some(pane) = self.tab_manager.active_pane() {
+                let px = pane.cursor_head[0];
+                let py = pane.cursor_head[1];
+                let pw = (preedit_text.chars().count() as f32 * cell_w).max(cell_w);
+
+                let spans = vec![(
+                    preedit_text.clone(),
+                    terminal::CellStyle::new().with_fg(terminal::ColorRgb { r: 255, g: 255, b: 255 }),
+                )];
+                self.text_engine.shape_buffer(&mut self.preedit_buffer, &spans);
+
+                areas.push(glyphon::TextArea {
+                    buffer: &self.preedit_buffer,
+                    left: px,
+                    top: py,
+                    scale: 1.0,
+                    bounds: glyphon::TextBounds {
+                        left: px as i32,
+                        top: py as i32,
+                        right: (px + pw + 50.0) as i32,
+                        bottom: (py + cell_h) as i32,
+                    },
+                    default_color: glyphon::Color::rgb(255, 255, 255),
                     custom_glyphs: &[],
                 });
             }

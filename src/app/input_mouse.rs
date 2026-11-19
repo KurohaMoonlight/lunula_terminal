@@ -196,8 +196,12 @@ impl GpuState {
                     let screen_row = (rel_y / self.text_engine.cell_height).max(0.0) as usize;
                     if col < pane.terminal.cols && screen_row < pane.terminal.rows {
                         let abs_row = pane.terminal.screen_to_abs_row(screen_row);
-                        if pane.terminal.get_hyperlink_at(col, abs_row).is_some() {
-                            self.window.set_cursor(winit::window::CursorIcon::Pointer);
+                        if let Some(url) = pane.terminal.get_hyperlink_at(col, abs_row) {
+                            if crate::platform::is_safe_url(&url) {
+                                self.window.set_cursor(winit::window::CursorIcon::Pointer);
+                            } else {
+                                self.window.set_cursor(winit::window::CursorIcon::Default);
+                            }
                         } else {
                             self.window.set_cursor(winit::window::CursorIcon::Default);
                         }
@@ -427,9 +431,7 @@ impl GpuState {
                                                 if let Some(url) =
                                                     pane.terminal.get_hyperlink_at(col, abs_row)
                                                 {
-                                                    let _ = std::process::Command::new("cmd")
-                                                        .args(["/c", "start", "", &url])
-                                                        .spawn();
+                                                    crate::platform::open_url_safely(&url);
                                                     return;
                                                 }
                                             }

@@ -1,80 +1,72 @@
 # 🌙 Luna Micro-Editor (`luna.exe`)
 
-**`luna`** adalah editor teks berbasis terminal (*TUI micro-editor*) bawaan Lunula Terminal. Didesain sebagai alternatif modern untuk `nano` yang ultra-ringan (<400 KB), mandiri tanpa dependensi eksternal (*zero external heavy dependencies*), memiliki waktu start instan (<5 ms), dan mendukung pewarnaan sintaksis ANSI TrueColor yang otomatis tersinkronisasi dengan tema Lunula Terminal.
+**`luna`** is the built-in terminal text editor (*TUI micro-editor*) shipped with Lunula Terminal. Designed as a modern, ultra-lightweight (<400 KB) alternative to `nano`, `luna` features zero external runtime dependencies, instant startup time (<5 ms), and full ANSI TrueColor lexical syntax highlighting synchronized with your Lunula Terminal theme.
 
 ---
 
-## ✨ Fitur Utama `luna`
+## ✨ Key Features of `luna`
 
 1. **Ultra-Lightweight & Single Executable**:
-   - Berukuran di bawah 400 KB dalam build rilis teroptimasi.
-   - Menggunakan raw console native Windows Console API tanpa ketergantungan library runtime eksternal.
-2. **Lexical Syntax Highlighting Cepat**:
-   - Mengenali dan mewarnai token kode secara otomatis:
-     - **Lua** (`.lua`)
-     - **Rust** (`.rs`)
-     - **Shell & PowerShell** (`.ps1`, `.psm1`, `.sh`, `.bash`, `.zsh`, `.cmd`, `.bat`)
-     - **Config** (`.json`, `.toml`, `.yaml`, `.yml`, `.ini`, `.conf`, `.omp.json`, `Cargo.lock`)
-     - **Python** (`.py`)
-     - **Markdown** (`.md`)
-3. **Sinkronisasi Tema Otomatis**:
-   - Otomatis membaca konfigurasi dari `lunula.lua`.
-   - Jika tema terminal diubah ke `catppuccin`, `tokyo_night`, `gruvbox`, `nord`, atau tema kustom di `themes/`, tampilan antarmuka dan warna syntax `luna` langsung berubah serasi.
-4. **Fitur Pengeditan Modern**:
-   - Undo bertingkat via `Ctrl + Z`.
-   - Pencarian teks via `Ctrl + F`.
-   - Konfirmasi penyimpanan otomatis saat keluar via `Ctrl + X`.
-   - Scrolling horizontal otomatis untuk baris kode panjang tanpa merusak nomor baris atau format warna.
+   * Binary footprint under 400 KB in optimized release builds.
+   * Utilizes native Windows Console APIs without heavy third-party TUI frameworks.
+2. **Fast Lexical Syntax Highlighting**:
+   * Automatically recognizes and highlights code tokens:
+     * **Lua** (`.lua`)
+     * **Rust** (`.rs`)
+     * **Shell & PowerShell** (`.ps1`, `.psm1`, `.sh`, `.bash`, `.zsh`, `.cmd`, `.bat`)
+     * **Configuration** (`.json`, `.toml`, `.yaml`, `.yml`, `.ini`, `.conf`, `.omp.json`, `Cargo.lock`)
+     * **Python** (`.py`)
+     * **Markdown** (`.md`)
+3. **Automatic Theme Synchronization**:
+   * Reads settings directly from `lunula.lua`.
+   * Switching your terminal theme to `catppuccin`, `tokyo_night`, `gruvbox`, `nord`, or custom files in `themes/` updates `luna`'s syntax highlights and UI borders immediately.
+4. **Modern Editing Controls**:
+   * Multi-level undo via `Ctrl + Z`.
+   * Fast in-buffer search via `Ctrl + F`.
+   * Unsaved changes confirmation prompt on exit (`Ctrl + X`).
+   * Clean horizontal scrolling for long lines preserving line number gutters and formatting.
 
 ---
 
-## 🚀 Cara Menjalankan
+## 🚀 Usage
 
-### Membuka Berkas di Direktori Aktif
+### Opening a File
 ```bash
-luna nama_berkas.lua
+luna file.lua
 ```
 
-### Membuka Berkas Baru
+### Creating a New File
 ```bash
-luna berkas_baru.rs
+luna new_file.rs
 ```
 
-### Membuka Konfigurasi Lunula Terminal Langsung
-Tekan tombol **Gear (⚙️)** di titlebar atau **`Ctrl + ,`**, lalu pilih **`[1] Edit Master Config`**. Terminal akan otomatis membuka berkas konfigurasi dengan path mutlak di `luna`.
+### Editing Lunula Configuration Directly
+Click the **Gear button (⚙️)** on the title bar or press **`Ctrl + ,`**, then select **`[1] Edit Master Config`**. Lunula automatically opens the configuration file with its absolute path in `luna`.
 
 ---
 
-## ⌨️ Pintasan Tombol (*Keybindings*) di `luna`
+## ⌨️ Luna Keybindings Reference
 
-| Shortcut | Fungsi | Keterangan |
+| Shortcut | Action | Description |
 | :--- | :--- | :--- |
-| `Ctrl + S` | **Simpan Berkas** | Menyimpan perubahan buffer ke disk |
-| `Ctrl + X` | **Keluar (*Exit*)** | Keluar dari editor (meminta konfirmasi jika ada modifikasi) |
-| `Ctrl + F` | **Cari Teks (*Find*)** | Membuka baris pencarian query teks |
-| `Ctrl + Z` | **Urungkan (*Undo*)** | Mengembalikan perubahan teks sebelumnya secara bertahap |
-| `Panah (← ↑ → ↓)` | **Navigasi Kursor** | Menggeser kursor karakter dan baris |
-| `Home` / `End` | **Awal / Akhir Baris** | Melompat ke kolom pertama / terakhir pada baris |
-| `Page Up` / `Page Down` | **Gulir Layar** | Menggulir satu layar penuh ke atas / ke bawah |
-| `Enter` | **Baris Baru** | Memecah baris teks dengan indentasi |
-| `Backspace` / `Del` | **Hapus Karakter** | Menghapus karakter di kiri / kanan kursor |
+| `Ctrl + S` | **Save File** | Saves current buffer to disk immediately |
+| `Ctrl + X` | **Exit** | Prompts to save if modified, then exits |
+| `Ctrl + Z` | **Undo** | Reverts recent typing and deletions |
+| `Ctrl + F` | **Search** | Opens search query bar at bottom of screen |
+| `Enter` (in search) | **Next Match** | Jumps to next occurrence of search term |
+| `Esc` (in search) | **Cancel Search** | Cancels search and returns to normal editing |
+| `Arrows (← ↑ → ↓)` | **Move Cursor** | Navigates cursor through text rows and columns |
+| `Home` / `End` | **Line Boundary** | Jumps to start or end of the current line |
+| `Page Up` / `Page Down` | **Page Scroll** | Scrolls viewable buffer up or down by one screen height |
+| `Backspace` / `Delete` | **Delete** | Removes characters before or after cursor |
 
 ---
 
-## 🔧 Menjadikan `luna` sebagai Editor Default
+## 🔧 Setting as Default Git Editor
 
-Karena `luna.exe` adalah executable mandiri, Anda dapat menggunakannya sebagai editor default untuk berbagai alat pengembang:
+To use `luna` as your default Git commit editor:
 
-### 1. Di Git
-Jadikan `luna` sebagai editor pesan commit:
 ```bash
 git config --global core.editor "luna"
 ```
-
-### 2. Di Profil PowerShell (`$PROFILE`)
-Tambahkan baris berikut di `$PROFILE`:
-```powershell
-Set-Alias -Name edit -Value luna
-$env:EDITOR = "luna"
-```
-Sekarang Anda cukup mengetik `edit file.txt` untuk membuka `luna` seketika!
+Whenever Git prompts for a commit message or rebase, it will open instantaneously in `luna`!

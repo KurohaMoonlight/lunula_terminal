@@ -235,6 +235,11 @@ impl TerminalGrid {
                     for c in col_start..=col_end {
                         if c < row.len() && row[c].c != '\0' {
                             line.push(row[c].c);
+                            if let Some(extras) = self.combining_chars.get(&(r, c)) {
+                                for &extra_c in extras {
+                                    line.push(extra_c);
+                                }
+                            }
                         }
                     }
                     let trimmed = line.trim_end_matches(' ');

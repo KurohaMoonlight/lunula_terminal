@@ -118,7 +118,32 @@ impl ApplicationHandler for LunulaApp {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Focused(focused) => {
                 s.is_focused = focused;
+                if let Some(pane) = s.tab_manager.active_pane_mut() {
+                    if pane.terminal.focus_reporting {
+                        let seq = if focused { b"\x1b[I" } else { b"\x1b[O" };
+                        pane.pty.write_bytes(seq);
+                        s.drain_pty();
+                    }
+                }
                 s.window.request_redraw();
+            }
+            WindowEvent::DroppedFile(path) => {
+                if let Some(pane) = s.tab_manager.active_pane_mut() {
+                    let path_str = path.to_string_lossy();
+                    let formatted = if path_str.contains(' ') {
+                        format!("\"{}\" ", path_str)
+                    } else {
+                        format!("{} ", path_str)
+                    };
+                    pane.terminal.clear_selection();
+                    pane.pty.write_bytes(formatted.as_bytes());
+                    pane.terminal.scroll_to_bottom();
+                    if !s.drain_pty() || s.should_exit {
+                        el.exit();
+                        return;
+                    }
+                    s.window.request_redraw();
+                }
             }
             WindowEvent::Resized(sz) => {
                 s.resize(sz);
@@ -130,6 +155,7 @@ impl ApplicationHandler for LunulaApp {
             }
             WindowEvent::Ime(ime_event) => match ime_event {
                 winit::event::Ime::Commit(text) => {
+                    s.ime_preedit = None;
                     if let Some(pane) = s.tab_manager.active_pane_mut() {
                         pane.terminal.clear_selection();
                         pane.pty.write_bytes(text.as_bytes());
@@ -141,7 +167,16 @@ impl ApplicationHandler for LunulaApp {
                         s.window.request_redraw();
                     }
                 }
-                winit::event::Ime::Preedit(_, _) => {
+                winit::event::Ime::Preedit(text, cursor) => {
+                    if text.is_empty() {
+                        s.ime_preedit = None;
+                    } else {
+                        s.ime_preedit = Some((text, cursor));
+                    }
+                    s.window.request_redraw();
+                }
+                winit::event::Ime::Disabled => {
+                    s.ime_preedit = None;
                     s.window.request_redraw();
                 }
                 _ => {}

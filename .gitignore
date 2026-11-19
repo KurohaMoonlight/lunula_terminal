@@ -1,15 +1,27 @@
 # Rust build artifacts
 /target
 **/*.rs.bk
+*.pdb
 
-# Installer folder & installer scripts (requested by user)
+# Temporary shell & terminal output dumps
+err.txt
+out.txt
+stdout.txt
+stderr.txt
+*.log
+*.tmp
+*.bak
+
+# Installer folder & build distributions
 installer/
 dist/
+releases/
+*.iss
+*.msi
 install*.ps1
 install*.bat
 install*.sh
 build_installer*.ps1
-*.iss
 
 # Operating System files
 Thumbs.db
@@ -23,4 +35,8 @@ $RECYCLE.BIN/
 *.swp
 *.swo
 *~
-*.log
+
+# Local configuration overrides
+*.local.lua
+*.override.lua
+lunula.local.lua

@@ -22,6 +22,8 @@ pub struct PtyManager {
     pub ipc_rx: Receiver<(Vec<u8>, std::sync::mpsc::Sender<()>)>,
     pub exited: Arc<AtomicBool>,
     pub wake_pending: Arc<AtomicBool>,
+    ipc_port: Option<u16>,
+    ipc_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl PtyManager {
@@ -78,9 +80,11 @@ impl PtyManager {
 
         // Direct local IPC bridge for binary-safe protocol passthrough (e.g. Kitty Graphics via limg)
         let ipc_listener_opt = std::net::TcpListener::bind("127.0.0.1:0").ok();
+        let mut ipc_port = None;
         if let Some(ref listener) = ipc_listener_opt {
             if let Ok(addr) = listener.local_addr() {
                 cmd.env("LUNULA_IPC_PORT", addr.port().to_string());
+                ipc_port = Some(addr.port());
             }
         }
 
@@ -121,39 +125,43 @@ impl PtyManager {
                 let _ = proxy_reader.send_event(());
             })?;
 
-        if let Some(listener) = ipc_listener_opt {
+        let ipc_thread = if let Some(listener) = ipc_listener_opt {
             let tx_ipc = ipc_tx;
             let proxy_ipc = proxy;
             let wake_ipc = Arc::clone(&wake_pending);
             let exited_ipc = Arc::clone(&exited);
 
-            thread::Builder::new()
-                .name("lunula-ipc".into())
-                .spawn(move || {
-                    while let Ok((mut stream, _)) = listener.accept() {
-                        if exited_ipc.load(Ordering::Acquire) {
-                            break;
-                        }
-                        // Read the complete IPC payload before forwarding so it can never
-                        // interleave mid-sequence with asynchronous ConPTY output.
-                        let mut payload = Vec::new();
-                        let _ = stream.read_to_end(&mut payload);
-                        if !payload.is_empty() {
-                            let (ack_tx, ack_rx) = channel::<()>();
-                            if tx_ipc.send((payload, ack_tx)).is_err() {
+            Some(
+                thread::Builder::new()
+                    .name("lunula-ipc".into())
+                    .spawn(move || {
+                        while let Ok((mut stream, _)) = listener.accept() {
+                            if exited_ipc.load(Ordering::Acquire) {
                                 break;
                             }
-                            if !wake_ipc.swap(true, Ordering::AcqRel) {
-                                let _ = proxy_ipc.send_event(());
+                            // Read the complete IPC payload before forwarding so it can never
+                            // interleave mid-sequence with asynchronous ConPTY output.
+                            let mut payload = Vec::new();
+                            let _ = stream.read_to_end(&mut payload);
+                            if !payload.is_empty() {
+                                let (ack_tx, ack_rx) = channel::<()>();
+                                if tx_ipc.send((payload, ack_tx)).is_err() {
+                                    break;
+                                }
+                                if !wake_ipc.swap(true, Ordering::AcqRel) {
+                                    let _ = proxy_ipc.send_event(());
+                                }
+                                // Wait for main thread to anchor the image at the current cursor row
+                                let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(2));
+                                let _ = stream.write_all(b"K");
+                                let _ = stream.flush();
                             }
-                            // Wait for main thread to anchor the image at the current cursor row
-                            let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(2));
-                            let _ = stream.write_all(b"K");
-                            let _ = stream.flush();
                         }
-                    }
-                })?;
-        }
+                    })?,
+            )
+        } else {
+            None
+        };
 
         Ok(Self {
             master: pair.master,
@@ -163,6 +171,8 @@ impl PtyManager {
             ipc_rx,
             exited,
             wake_pending,
+            ipc_port,
+            ipc_thread,
         })
     }
 
@@ -199,5 +209,59 @@ impl PtyManager {
             pixel_width: 0,
             pixel_height: 0,
         });
+    }
+}
+
+impl Drop for PtyManager {
+    fn drop(&mut self) {
+        // Signal background threads to terminate
+        self.exited.store(true, Ordering::Release);
+
+        // Unblock blocking listener.accept() in lunula-ipc thread by connecting to local loopback port
+        if let Some(port) = self.ipc_port {
+            let _ = std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                std::time::Duration::from_millis(100),
+            );
+        }
+
+        // Wait for the IPC listener thread to cleanly terminate and release its loopback port
+        if let Some(handle) = self.ipc_thread.take() {
+            let _ = handle.join();
+        }
+
+        // Terminate child shell process if still alive
+        let _ = self.child.kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ipc_listener_unblocks_on_self_connect() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let port = listener.local_addr().unwrap().port();
+        let exited = Arc::new(AtomicBool::new(false));
+        let exited_clone = Arc::clone(&exited);
+
+        let handle = std::thread::spawn(move || {
+            while let Ok((_, _)) = listener.accept() {
+                if exited_clone.load(Ordering::Acquire) {
+                    break;
+                }
+            }
+        });
+
+        // Thread is blocked on accept(). Signal exited and self-connect to unblock.
+        exited.store(true, Ordering::Release);
+        let _ = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            std::time::Duration::from_millis(100),
+        );
+
+        // Join must complete immediately without hanging or leaking port/thread
+        assert!(handle.join().is_ok());
     }
 }

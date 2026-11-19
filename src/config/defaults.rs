@@ -40,6 +40,8 @@ return {
         font_family = "0xProto Nerd Font Mono",
         font_size = 14.5,
         max_scrollback = 5000,
+        -- Keamanan: Izinkan aplikasi PTY/remote membaca clipboard via OSC 52 query (default: false demi keamanan)
+        allow_clipboard_read = false,
     },
     cursor = {
         -- Bentuk kursor default: "block", "beam", atau "underline"

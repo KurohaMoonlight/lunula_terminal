@@ -231,6 +231,9 @@ impl LunulaConfig {
                 if let Ok(sb) = t_val.get::<usize>("max_scrollback") {
                     config.terminal.max_scrollback = sb.max(100);
                 }
+                if let Ok(acr) = t_val.get::<bool>("allow_clipboard_read") {
+                    config.terminal.allow_clipboard_read = acr;
+                }
             }
 
             if let Ok(cur_val) = table.get::<Table>("cursor") {
@@ -394,6 +397,7 @@ mod tests {
         assert_eq!(cfg.wobble.stiffness, 420.0);
         assert_eq!(cfg.terminal.font_family, "0xProto Nerd Font Mono");
         assert_eq!(cfg.terminal.font_size, 14.5);
+        assert!(!cfg.terminal.allow_clipboard_read);
         assert_eq!(cfg.cursor.shape, "block");
         assert!(cfg.cursor.trail);
         assert_eq!(cfg.colors.selection, [45, 79, 103]);
@@ -407,7 +411,7 @@ mod tests {
         return {
             window = { width = 1280, height = 720, opacity = 0.88, title = "Custom Lunula", lock_size = true },
             wobble = { stiffness = 250.0, damping = 12.0 },
-            terminal = { font_size = 18.0, max_scrollback = 10000 },
+            terminal = { font_size = 18.0, max_scrollback = 10000, allow_clipboard_read = true },
             cursor = { shape = "beam", blinking = false, color = "#ff79c6" },
             colors = { selection = "#ff5577" },
             fetch = { animation = 2, live = false },
@@ -426,6 +430,7 @@ mod tests {
         assert_eq!(cfg.wobble.damping, 12.0);
         assert_eq!(cfg.terminal.font_size, 18.0);
         assert_eq!(cfg.terminal.max_scrollback, 10000);
+        assert!(cfg.terminal.allow_clipboard_read);
         assert_eq!(cfg.cursor.shape, "beam");
         assert!(!cfg.cursor.blinking);
         assert_eq!(cfg.cursor.color, [255, 121, 198]);

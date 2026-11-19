@@ -69,6 +69,7 @@ pub struct TerminalConfig {
     pub font_family: String,
     pub font_size: f32,
     pub max_scrollback: usize,
+    pub allow_clipboard_read: bool,
 }
 
 impl Default for TerminalConfig {
@@ -77,6 +78,7 @@ impl Default for TerminalConfig {
             font_family: "JetBrainsMono Nerd Font".to_string(),
             font_size: 14.5,
             max_scrollback: 5000,
+            allow_clipboard_read: false,
         }
     }
 }

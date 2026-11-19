@@ -167,10 +167,24 @@ impl Perform for TerminalGrid {
     fn print(&mut self, c: char) {
         let w = c.width().unwrap_or(1);
         if w == 0 {
+            // Attach combining diacritics, variation selectors (e.g. U+FE0F), and ZWJ (U+200D) to the preceding cell
+            if self.cursor_x > 0 && self.cursor_y < self.rows {
+                let mut target_col = self.cursor_x - 1;
+                while target_col > 0 && self.cells[self.cursor_y][target_col].c == '\0' {
+                    target_col -= 1;
+                }
+                let abs_r = self.screen_to_abs_row(self.cursor_y);
+                self.combining_chars.entry((abs_r, target_col)).or_default().push(c);
+                let row_idx = self.cursor_y;
+                self.mark_row_dirty(row_idx);
+            }
             return;
         }
 
         if self.cursor_x + w > self.cols {
+            if self.cursor_x > 0 && self.cursor_y < self.rows {
+                self.cells[self.cursor_y][self.cursor_x - 1].style.set_wrapped(true);
+            }
             self.cursor_x = 0;
             if self.cursor_y == self.scroll_region_bottom {
                 self.scroll_region_up();
@@ -308,10 +322,25 @@ impl Perform for TerminalGrid {
                     self.current_hyperlink_idx = 0;
                 } else if let Some(existing_pos) = self.hyperlinks.iter().rposition(|u| u == url) {
                     self.current_hyperlink_idx = (existing_pos + 1) as u16;
-                } else if self.hyperlinks.len() < u16::MAX as usize - 1 {
-                    let idx = (self.hyperlinks.len() + 1) as u16;
-                    self.hyperlinks.push(url.to_string());
-                    self.current_hyperlink_idx = idx;
+                } else {
+                    // Periodic / capacity compaction:
+                    // 1. Table grew to >= 512 entries and has added >= 128 new entries since last prune, or
+                    // 2. Table approaches the u16::MAX index limit.
+                    if (self.hyperlinks.len() >= 512
+                        && self.hyperlinks.len().saturating_sub(self.last_hyperlink_prune_len) >= 128)
+                        || self.hyperlinks.len() >= u16::MAX as usize - 2
+                    {
+                        self.prune_hyperlinks();
+                    }
+
+                    // Check again in case compaction retained this URL or freed space
+                    if let Some(existing_pos) = self.hyperlinks.iter().rposition(|u| u == url) {
+                        self.current_hyperlink_idx = (existing_pos + 1) as u16;
+                    } else if self.hyperlinks.len() < u16::MAX as usize - 1 {
+                        let idx = (self.hyperlinks.len() + 1) as u16;
+                        self.hyperlinks.push(url.to_string());
+                        self.current_hyperlink_idx = idx;
+                    }
                 }
             } else {
                 self.current_hyperlink_idx = 0;
@@ -319,30 +348,46 @@ impl Perform for TerminalGrid {
         } else if params[0] == b"10" {
             // OSC 10: Foreground Color Query (OSC 10 ; ? ST)
             if params.len() >= 2 && params[1] == b"?" {
-                // Kanagawa fujiWhite (#dcd7ba)
-                self.responses.push(b"\x1b]10;rgb:dc00/d700/ba00\x1b\\".to_vec());
+                let resp = format!(
+                    "\x1b]10;rgb:{:02x}00/{:02x}00/{:02x}00\x1b\\",
+                    self.fg_color.r, self.fg_color.g, self.fg_color.b
+                );
+                self.responses.push(resp.into_bytes());
             }
         } else if params[0] == b"11" {
             // OSC 11: Background Color Query (OSC 11 ; ? ST)
             if params.len() >= 2 && params[1] == b"?" {
-                // Kanagawa sumiInk1 (#1f1f28)
-                self.responses.push(b"\x1b]11;rgb:1f00/1f00/2800\x1b\\".to_vec());
+                let resp = format!(
+                    "\x1b]11;rgb:{:02x}00/{:02x}00/{:02x}00\x1b\\",
+                    self.bg_color.r, self.bg_color.g, self.bg_color.b
+                );
+                self.responses.push(resp.into_bytes());
             }
         } else if params[0] == b"12" {
             // OSC 12: Cursor Color Query (OSC 12 ; ? ST)
             if params.len() >= 2 && params[1] == b"?" {
-                // Kanagawa springBlue (#7fb4ca)
-                self.responses.push(b"\x1b]12;rgb:7f00/b400/ca00\x1b\\".to_vec());
+                let c = self.cursor_config.color;
+                let resp = format!(
+                    "\x1b]12;rgb:{:02x}00/{:02x}00/{:02x}00\x1b\\",
+                    c.r, c.g, c.b
+                );
+                self.responses.push(resp.into_bytes());
             }
         } else if params[0] == b"52" {
             // OSC 52: Clipboard Manipulation: OSC 52 ; Pc ; Pd ST
             if params.len() >= 3 {
                 if params[2] == b"?" {
-                    if let Some(text) = crate::platform::clipboard::get_text() {
-                        let encoded = crate::terminal::graphics::encode_base64(text.as_bytes());
-                        let target = std::str::from_utf8(params[1]).unwrap_or("c");
-                        let resp = format!("\x1b]52;{};{}\x1b\\", target, encoded);
-                        self.responses.push(resp.into_bytes());
+                    if self.allow_clipboard_read {
+                        if let Some(text) = crate::platform::clipboard::get_text() {
+                            let encoded = crate::terminal::graphics::encode_base64(text.as_bytes());
+                            let target = std::str::from_utf8(params[1]).unwrap_or("c");
+                            let resp = format!("\x1b]52;{};{}\x1b\\", target, encoded);
+                            self.responses.push(resp.into_bytes());
+                        }
+                    } else {
+                        log::warn!(
+                            "Ignored OSC 52 clipboard read query: allow_clipboard_read is disabled in configuration"
+                        );
                     }
                 } else if let Some(decoded) = crate::terminal::graphics::decode_base64(params[2]) {
                     if let Ok(text) = String::from_utf8(decoded) {
@@ -472,6 +517,7 @@ impl Perform for TerminalGrid {
                         }
                     }
                     2004 => self.bracketed_paste = true,
+                    1004 => self.focus_reporting = true,
                     // DEC Private Mode ?2026h: Begin Synchronized Update (BSU)
                     2026 => {
                         self.in_sync_update = true;
@@ -504,6 +550,7 @@ impl Perform for TerminalGrid {
                         }
                     }
                     2004 => self.bracketed_paste = false,
+                    1004 => self.focus_reporting = false,
                     // DEC Private Mode ?2026l: End Synchronized Update (ESU)
                     2026 => {
                         self.in_sync_update = false;
@@ -519,6 +566,10 @@ impl Perform for TerminalGrid {
                     if p0 == 2026 {
                         let status = if self.in_sync_update { 1 } else { 2 };
                         let resp = format!("\x1b[?2026;{}$y", status);
+                        self.responses.push(resp.into_bytes());
+                    } else if p0 == 1004 {
+                        let status = if self.focus_reporting { 1 } else { 2 };
+                        let resp = format!("\x1b[?1004;{}$y", status);
                         self.responses.push(resp.into_bytes());
                     }
                 }
@@ -617,6 +668,9 @@ impl Perform for TerminalGrid {
                         self.scroll_offset = 0;
                         self.target_scroll_y = 0.0;
                         self.current_scroll_y = 0.0;
+                        if !self.hyperlinks.is_empty() {
+                            self.prune_hyperlinks();
+                        }
                     }
                     _ => {}
                 }

@@ -53,6 +53,16 @@ impl Pane {
         let mut terminal = TerminalGrid::new(cols as usize, rows as usize);
         terminal.cell_height = text_engine.cell_height;
         terminal.max_scrollback = config.terminal.max_scrollback;
+        terminal.allow_clipboard_read = config.terminal.allow_clipboard_read;
+        let mut theme = crate::theme::Theme::from_name(&config.theme);
+        if let Some(bg) = config.colors.background {
+            theme.bg = crate::theme::ColorRgb::new(bg[0], bg[1], bg[2]);
+        }
+        if let Some(fg) = config.colors.foreground {
+            theme.fg = crate::theme::ColorRgb::new(fg[0], fg[1], fg[2]);
+        }
+        terminal.fg_color = terminal::ColorRgb { r: theme.fg.r, g: theme.fg.g, b: theme.fg.b };
+        terminal.bg_color = terminal::ColorRgb { r: theme.bg.r, g: theme.bg.g, b: theme.bg.b };
         terminal.selection_color = terminal::ColorRgb {
             r: config.colors.selection[0],
             g: config.colors.selection[1],

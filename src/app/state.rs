@@ -55,6 +55,7 @@ pub struct GpuState {
     pub settings_selected_index: usize,
     pub settings_buffer: glyphon::Buffer,
     pub settings_total_height: f32,
+    pub preedit_buffer: glyphon::Buffer,
 
     pub bar_center_buffer: glyphon::Buffer,
     pub bar_clock_buffer: glyphon::Buffer,
@@ -87,6 +88,7 @@ pub struct GpuState {
     pub initial_trim_frames: u8,
     pub should_exit: bool,
     pub theme: crate::theme::Theme,
+    pub ime_preedit: Option<(String, Option<(usize, usize)>)>,
 }
 
 impl GpuState {
@@ -259,6 +261,7 @@ impl GpuState {
         let bar_gear_buffer = text_engine.create_buffer();
         let bar_help_buffer = text_engine.create_buffer();
         let vi_status_buffer = text_engine.create_buffer();
+        let preedit_buffer = text_engine.create_buffer();
         let cached_username = std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_else(|_| "user".to_string());
@@ -307,6 +310,7 @@ impl GpuState {
             settings_selected_index: 0,
             settings_buffer,
             settings_total_height,
+            preedit_buffer,
             bar_center_buffer,
             bar_clock_buffer,
             bar_gear_buffer,
@@ -335,6 +339,7 @@ impl GpuState {
             next_blink_frame: None,
             initial_trim_frames: 0,
             should_exit: false,
+            ime_preedit: None,
         }
     }
 
@@ -494,12 +499,17 @@ impl GpuState {
 
         for pane in self.tab_manager.panes.values_mut() {
             pane.terminal.set_palette(term_palette);
+            pane.terminal.set_theme_colors(
+                terminal::ColorRgb { r: self.theme.fg.r, g: self.theme.fg.g, b: self.theme.fg.b },
+                terminal::ColorRgb { r: self.theme.bg.r, g: self.theme.bg.g, b: self.theme.bg.b },
+            );
             pane.terminal.selection_color = terminal::ColorRgb {
                 r: new_cfg.colors.selection[0],
                 g: new_cfg.colors.selection[1],
                 b: new_cfg.colors.selection[2],
             };
             pane.terminal.max_scrollback = new_cfg.terminal.max_scrollback;
+            pane.terminal.allow_clipboard_read = new_cfg.terminal.allow_clipboard_read;
             pane.terminal.cursor_config.shape = match new_cfg.cursor.shape.as_str() {
                 "beam" => terminal::CursorShape::Beam,
                 "underline" => terminal::CursorShape::Underline,
@@ -533,6 +543,7 @@ impl GpuState {
             self.bar_gear_buffer.set_metrics(new_metrics);
             self.bar_help_buffer.set_metrics(new_metrics);
             self.vi_status_buffer.set_metrics(new_metrics);
+            self.preedit_buffer.set_metrics(new_metrics);
             for tab in &mut self.tab_manager.tabs {
                 tab.buffer.set_metrics(new_metrics);
             }

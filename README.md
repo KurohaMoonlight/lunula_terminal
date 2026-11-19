@@ -5,142 +5,143 @@
 <h1 align="center">🌙 Lunula Terminal</h1>
 
 <p align="center">
-  <strong>Ultra-Lightweight GPU Terminal Emulator with Elastic Wobble Physics & Built-in Developer Suite</strong>
+  <strong>Ultra-Lightweight GPU-Accelerated Terminal Emulator with Elastic Wobble Physics & Built-in Developer Suite</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Release-v0.1.0-magenta?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/Platform-Windows%20x86__64-blue?style=flat-square&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/Renderer-WGPU%20%2B%20Glyphon-cyan?style=flat-square" alt="Renderer" />
-  <img src="https://img.shields.io/badge/Binary%20Size-%3C10%20MB-emerald?style=flat-square" alt="Binary Size" />
+  <img src="https://img.shields.io/badge/Binary%20Size-%3C12%20MB-emerald?style=flat-square" alt="Binary Size" />
   <img src="https://img.shields.io/badge/Unit%20Tests-49%20Passing-green?style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/badge/Hot--Reload-Lua%205.4-purple?style=flat-square&logo=lua" alt="Lua" />
 </p>
 
 ---
 
-**Lunula Terminal** adalah emulator terminal modern berbasis GPU (`wgpu` + `glyphon`) yang dirancang dengan filosofi *ultra-lightweight*, estetika minimalis, dan animasi fisika elastis (*jelly wobble*). Lunula hadir sebagai satu kesatuan suite mandiri (*single executable*) berukuran kurang dari 10 MB, tanpa dependensi runtime berat, lengkap dengan text editor modal bawaan (**luna**), system fetcher 3D (**lfetch**), penampil gambar terminal (**limg**), dan package/theme manager (**lpm**).
+**Lunula Terminal** is an ultra-lightweight, high-performance GPU terminal emulator built with Rust, `wgpu`, and `glyphon`. Designed around the core philosophy of minimalism, speed, and expressive physics, Lunula delivers zero-latency sub-pixel rendering and an interactive 2D spring-damper *jelly wobble* window effect. 
+
+The entire developer suite—including the terminal, built-in modal text editor (**luna**), 3D ASCII system fetcher (**lfetch**), terminal image viewer (**limg**), and theme manager (**lpm**)—compiles into standalone executables under 12 MB total, with zero runtime dependencies.
 
 ---
 
-## 💎 Fitur Unggulan
+## 💎 Key Features
 
-* ⚡ **GPU-Accelerated Rendering**: Rendering font sub-pixel berkecepatan tinggi via `wgpu` dan `glyphon` dengan dukungan refresh rate 120/144Hz, *zero-allocation per frame*, dan konsumsi CPU minimal.
-* 🍮 **Elastic Jelly Wobble Physics**: Simulasi pegas 2D (*mass-spring-damper*) dinamis pada pergerakan dan drag jendela, memberikan karakter visual yang hidup dan menyenangkan.
-* 🪟 **Tiling Binary Split Panes & Tabs**: Buka multi-tab dan bagi layar secara vertikal maupun horizontal sesuka hati dengan navigasi keyboard intuitif (`Alt + Arrows`).
-* ⚙️ **Modular Lua Configuration**: Konfigurasi modular terpisah yang dapat di-*hot-reload* seketika saat disimpan:
-  * [`lunula.lua`](file:///e:/My%20Projects/lunula_terminal/lunula.lua) — Pengaturan umum, fisika wobble, font, dan shell.
-  * [`colors.lua`](file:///e:/My%20Projects/lunula_terminal/colors.lua) — Kustomisasi 16 palet ANSI dan override warna UI.
-  * [`keybinds.lua`](file:///e:/My%20Projects/lunula_terminal/keybinds.lua) — Pemetaan shortcut keyboard kustom secara dinamis.
-* 🌙 **Micro-Editor Bawaan (`luna`)**: Text editor modal ultra-cepat (<400 KB) dengan *lexical syntax highlighting* (Rust, Lua, Python, JS/TS, Go, JSON) dan antarmuka TUI berbasis palet Kanagawa Wave.
-* 🔍 **Alacritty-Style Vi Mode & Regex Hints**: Jelajahi riwayat scrollback tanpa mouse, lakukan pencarian regex, visual selection, copy/yank, serta pemindaian tautan URL, hash commit, dan path file secara instan (`Ctrl+Shift+U`).
-* 🖼️ **Kitty Graphics Protocol**: Dukungan tampilan gambar grafis resolusi penuh langsung di dalam terminal melalui utilitas pendamping `limg`.
-* 🛡️ **Zero Runtime Dependencies**: Seluruh dependensi terkompilasi statis (*self-contained*), tidak memerlukan instalasi runtime eksternal.
+* ⚡ **GPU-Accelerated Text Pipeline**: Direct WGPU render pass utilizing Glyphon for crisp sub-pixel font rasterization at 120/144Hz with zero allocations during active typing.
+* 🍮 **Elastic Jelly Wobble Physics**: Real-time 2D mass-spring-damper mesh physics that responds to window movements and dragging, bringing tactile life back to the developer desktop.
+* 🪟 **Tiling Binary Split Panes & Tabs**: Arbitrary vertical and horizontal splits with direction-aware keyboard navigation (`Alt + Arrows`), multi-tab support, and synchronized screen updates.
+* ⚙️ **Hot-Reloadable Lua Ecosystem**: Modular configuration powered by Lua 5.4 that reloads automatically the instant you save:
+  * [`lunula.lua`](file:///e:/My%20Projects/lunula_terminal/lunula.lua) — Master configuration (Window, Physics, Font, Shell).
+  * [`colors.lua`](file:///e:/My%20Projects/lunula_terminal/colors.lua) — 16 ANSI palette colors and UI theme overrides.
+  * [`keybinds.lua`](file:///e:/My%20Projects/lunula_terminal/keybinds.lua) — Fully dynamic custom keyboard shortcut mappings.
+* 🌙 **Built-in Modal Code Editor (`luna`)**: Ultra-fast nano/vim-inspired text editor (<400 KB) featuring lexical syntax highlighting for Rust, Lua, Python, JavaScript/TypeScript, Go, and JSON.
+* 🔍 **Alacritty-Style Vi Navigation & Regex Hints**: Keyboard-driven scrollback buffer navigation, visual character and line selection, text yanking, and instant scanning for URLs, hashes, and file paths (`Ctrl+Shift+U`).
+* 🖼️ **Kitty Graphics Protocol**: High-performance inline terminal graphics rendering via the companion utility `limg`.
+* 🛡️ **Zero External Runtime Dependencies**: Standalone binaries without requiring external frameworks, runtimes, or heavy web engines.
 
 ---
 
-## 🚀 Panduan Instalasi & Penggunaan
+## 🚀 Installation & Quick Start
 
-### Opsi 1: Unduh Paket Rilis Standalone (Rekomendasi)
-Unduh paket rilis resmi dari tab [GitHub Releases](https://github.com/lunula-terminal/releases) atau gunakan arsip di folder [dist/](file:///e:/My%20Projects/lunula_terminal/dist/):
+### Option 1: Standalone Release Package (Recommended)
+Download the latest release archive from [GitHub Releases](https://github.com/lunula-terminal/releases) or use the bundle located in [dist/](file:///e:/My%20Projects/lunula_terminal/dist/):
 
-1. Unduh dan ekstrak `lunula-terminal-v0.1.0-windows-x86_64.zip`.
-2. **Instalasi Otomatis**: Cukup *double-click* file `install.bat`.
-   * Memasang Lunula Terminal ke `%LOCALAPPDATA%\Programs\Lunula\bin`.
-   * Mendaftarkan perintah `lunula`, `luna`, `lfetch`, `limg`, dan `lpm` ke `PATH` Windows.
-   * Menyiapkan template konfigurasi aman di `%APPDATA%\lunula\`.
-   * Membuat pintasan (*shortcut*) di Start Menu dan Desktop.
-3. **Mode Portable**: Tidak ingin menginstal? Cukup jalankan `Lunula.bat` (atau `bin\lunula_terminal.exe`) langsung dari folder mana pun!
+1. Download and extract `lunula-terminal-v0.1.0-windows-x86_64.zip`.
+2. **Automated Setup**: Double-click `install.bat`.
+   * Installs Lunula Suite to `%LOCALAPPDATA%\Programs\Lunula\bin`.
+   * Registers `lunula`, `luna`, `lfetch`, `limg`, and `lpm` to your Windows `PATH`.
+   * Automatically registers in **Windows Settings $\rightarrow$ Apps $\rightarrow$ Installed apps** for clean uninstallation.
+   * Creates Start Menu and Desktop shortcuts with the official app icon.
+3. **Portable Mode**: Prefer no installation? Simply double-click `Lunula.bat` (or run `bin\lunula.exe`) directly from anywhere (USB drive, custom directory)!
 
-### Opsi 2: Kompilasi Mandiri dari Source Code
-Pastikan Anda telah memasang Rust toolchain (stable):
+### Option 2: Build From Source
+Ensure you have the Rust stable toolchain installed:
 
 ```bash
-# Clone repositori
+# Clone the repository
 git clone https://github.com/lunula-terminal/lunula_terminal.git
 cd lunula_terminal
 
-# Jalankan seluruh unit test
+# Run unit test suite (49 passing)
 cargo test
 
-# Bangun seluruh biner rilis teroptimasi
+# Build all release binaries with full link-time optimization (LTO)
 cargo build --release
 
-# Jalankan terminal
-./target/release/lunula_terminal.exe
+# Launch Lunula Terminal
+./target/release/lunula.exe
 ```
 
 ---
 
-## 🧰 Paket Utilitas Pendamping (CLI Suite)
+## 🧰 Included CLI Companion Tools
 
-| Eksekutabel | Ukuran | Deskripsi & Fungsi |
+| Executable | Size | Description & Role |
 | :--- | :--- | :--- |
-| **`lunula_terminal.exe`** | ~9.6 MB | Emulator terminal GPU utama dengan ConPTY & animasi wobble |
-| **`lunula.exe`** | Alias | Pintasan CLI cepat untuk meluncurkan terminal |
-| **`luna.exe`** | ~400 KB | Modal code editor bergaya nano dengan syntax highlighting |
-| **`lfetch.exe`** | ~800 KB | System fetcher dengan render logo bulan 3D raymarched |
-| **`limg.exe`** | ~330 KB | Penampil gambar inline Kitty Graphics protocol di terminal |
-| **`lpm.exe`** | ~430 KB | Package & theme manager untuk mengunduh tema kustom |
+| **`lunula.exe`** | ~9.6 MB | Main GPU terminal emulator with ConPTY and wobble physics |
+| **`luna.exe`** | ~400 KB | Fast modal text editor with syntax highlighting |
+| **`lfetch.exe`** | ~800 KB | System fetch utility with 3D raymarched moon animation |
+| **`limg.exe`** | ~330 KB | High-performance inline Kitty Graphics image viewer |
+| **`lpm.exe`** | ~430 KB | Package and theme manager for custom color palettes |
 
 ---
 
-## ⌨️ Pintasan Keyboard Utama
+## ⌨️ Default Keyboard Shortcuts
 
-| Shortcut | Aksi / Fungsi |
+| Shortcut | Action / Description |
 | :--- | :--- |
-| `Ctrl + Shift + T` | Buka Tab baru |
-| `Ctrl + Tab` / `Ctrl + Shift + Tab` | Pindah ke Tab berikutnya / sebelumnya |
-| `Ctrl + 1..9` | Lompat langsung ke Tab 1 hingga 9 |
-| `Ctrl + Shift + E` | Split Pane Vertikal (kiri / kanan) |
-| `Ctrl + Shift + D` | Split Pane Horizontal (atas / bawah) |
-| `Alt + Panah (← ↑ → ↓)` | Pindah fokus navigasi antar Split Pane |
-| `Ctrl + Shift + W` | Tutup Split Pane aktif / Tab aktif |
-| `Ctrl + C` / `Ctrl + Shift + C` | Salin teks seleksi (atau kirim `SIGINT` ke proses) |
-| `Ctrl + V` / `Klik Kanan` | Tempel (*paste*) teks dari Clipboard |
-| `Ctrl + Shift + F` | Pencarian cepat teks riwayat (*Quick Search*) |
-| `Ctrl + Shift + Space` | Beralih ke **Vi Navigation Mode** |
-| `Ctrl + Shift + U` | Pindai & sorot **Regex Hints** (URL, path, git hash) |
-| `Ctrl + ,` / `Tombol Gear ⚙️` | Buka **Settings & Configuration Hub** |
-| `Shift + F1` / `Tombol ?` | Buka jendela referensi bantuan (*Help Modal*) |
-| `Ctrl + Shift + R` | Muat ulang konfigurasi seketika (*Hot-Reload*) |
-| `Ctrl + Shift + P` | Muat ulang profil PowerShell (`. $PROFILE`) |
-| `F11` | Beralih mode Layar Penuh (*Fullscreen / Maximize*) |
+| `Ctrl + Shift + T` | Open a new Tab |
+| `Ctrl + Tab` / `Ctrl + Shift + Tab` | Switch to Next / Previous Tab |
+| `Ctrl + 1..9` | Jump directly to Tab 1 through 9 |
+| `Ctrl + Shift + E` | Split Active Pane Vertically (side-by-side) |
+| `Ctrl + Shift + D` | Split Active Pane Horizontally (top / bottom) |
+| `Alt + Arrows (← ↑ → ↓)` | Navigate focus between split panes |
+| `Ctrl + Shift + W` | Close active split pane (or active tab if last) |
+| `Ctrl + C` / `Ctrl + Shift + C` | Copy selection (or send `SIGINT` if no selection) |
+| `Ctrl + V` / `Right-Click` | Paste clipboard text into active terminal |
+| `Ctrl + Shift + F` | Quick Search across scrollback buffer |
+| `Ctrl + Shift + Space` | Toggle **Vi Navigation Mode** |
+| `Ctrl + Shift + U` | Scan and highlight **Regex Hints** (URLs, file paths, git hashes) |
+| `Ctrl + ,` / `Gear Button ⚙️` | Open **Settings & Configuration Hub** |
+| `Shift + F1` / `Question Mark ?` | Open **Shortcuts & Features Reference** |
+| `Ctrl + Shift + R` | Hot-reload configuration (`lunula.lua`) |
+| `Ctrl + Shift + P` | Reload PowerShell profile (`. $PROFILE`) |
+| `F11` | Toggle Fullscreen / Maximize window |
 
 > [!TIP]
-> Seluruh pintasan keyboard di atas dapat diubah dengan mudah melalui berkas [`keybinds.lua`](file:///e:/My%20Projects/lunula_terminal/keybinds.lua) dan akan otomatis ter-update pada jendela bantuan (**Help Modal**)!
+> All keybindings above can be customized dynamically in [`keybinds.lua`](file:///e:/My%20Projects/lunula_terminal/keybinds.lua). Changes are hot-reloaded immediately and reflected in the Help Modal overlay!
 
 ---
 
-## 📚 Dokumentasi Terperinci (`docs/`)
+## 📚 Detailed Documentation (`docs/`)
 
-Untuk panduan mendalam, silakan baca dokumentasi teknis di folder [`docs/`](file:///e:/My%20Projects/lunula_terminal/docs/):
+Explore in-depth architectural and usage guides in the [`docs/`](file:///e:/My%20Projects/lunula_terminal/docs/) directory:
 
-* ⚙️ **[Panduan Konfigurasi Lengkap (CONFIGURATION.md)](file:///e:/My%20Projects/lunula_terminal/docs/CONFIGURATION.md)**: Rincian parameter Lua, kalibrasi fisika pegas, dan pembuatan tema warna kustom.
-* ⌨️ **[Daftar Keybindings & Navigasi (KEYBINDINGS.md)](file:///e:/My%20Projects/lunula_terminal/docs/KEYBINDINGS.md)**: Panduan lengkap Vi mode, Regex hints, dan pemetaan pintasan keyboard.
-* 🌙 **[Panduan Editor luna (LUNA_EDITOR.md)](file:///e:/My%20Projects/lunula_terminal/docs/LUNA_EDITOR.md)**: Fitur editing, pencarian cepat, integrasi Git core editor, dan sistem syntax highlighting.
-* 🧰 **[Utilitas Pendamping CLI (CLI_COMPANIONS.md)](file:///e:/My%20Projects/lunula_terminal/docs/CLI_COMPANIONS.md)**: Panduan penggunaan `lfetch`, `limg`, dan `lpm`.
-* 🔍 **[Pemecahan Masalah & Solusi (TROUBLESHOOTING.md)](file:///e:/My%20Projects/lunula_terminal/docs/TROUBLESHOOTING.md)**: Penanganan font Nerd Font, optimalisasi GPU hemat daya, dan diagnostik.
-* 🏗️ **[Arsitektur Teknis (ARCHITECTURE.md)](file:///e:/My%20Projects/lunula_terminal/docs/ARCHITECTURE.md)**: Penjelasan arsitektur internal modul, alur pipeline WGPU, dan integrasi ConPTY.
-* ⚡ **[Optimasi Performa & Memori (OPTIMIZATIONS.md)](file:///e:/My%20Projects/lunula_terminal/docs/OPTIMIZATIONS.md)**: Rincian 7 strategi optimasi memori dan *zero-allocation render pass*.
+* ⚙️ **[Configuration Guide (CONFIGURATION.md)](file:///e:/My%20Projects/lunula_terminal/docs/CONFIGURATION.md)**: Lua parameters, physics calibration, and custom theme creation.
+* ⌨️ **[Keybindings & Navigation (KEYBINDINGS.md)](file:///e:/My%20Projects/lunula_terminal/docs/KEYBINDINGS.md)**: Detailed cheat sheet for Vi mode, regex hints, and custom hotkeys.
+* 🌙 **[Luna Editor Manual (LUNA_EDITOR.md)](file:///e:/My%20Projects/lunula_terminal/docs/LUNA_EDITOR.md)**: Editing controls, search, Git editor integration, and syntax parser.
+* 🧰 **[CLI Companions Guide (CLI_COMPANIONS.md)](file:///e:/My%20Projects/lunula_terminal/docs/CLI_COMPANIONS.md)**: Manual for `lfetch`, `limg`, and `lpm`.
+* 🔍 **[Troubleshooting Guide (TROUBLESHOOTING.md)](file:///e:/My%20Projects/lunula_terminal/docs/TROUBLESHOOTING.md)**: Font glyph troubleshooting, GPU battery profiles, and diagnostics.
+* 🏗️ **[Technical Architecture (ARCHITECTURE.md)](file:///e:/My%20Projects/lunula_terminal/docs/ARCHITECTURE.md)**: Module architecture, WGPU data flow, and Windows ConPTY integration.
+* ⚡ **[Performance & Memory Optimizations (OPTIMIZATIONS.md)](file:///e:/My%20Projects/lunula_terminal/docs/OPTIMIZATIONS.md)**: 7 technical strategies behind zero-allocation render passes and memory footprint.
 
 ---
 
-## 🏛️ Prinsip Inti (`principle.md`)
+## 🏛️ Core Principles (`principle.md`)
 
 ```text
 "ultra-lightweight terminal, highly customisable, single executable,
  no dependencies, focus on speed, minimalism, animation"
 ```
 
-1. **Kecepatan Maksimal**: Latensi input mendekati nol (*zero-latency keystrokes*), pipeline render langsung ke hardware GPU.
-2. **Kustomisasi Fleksibel**: Pengguna memegang kendali penuh atas tampilan, warna, tombol pintas, dan fisika melalui Lua.
-3. **Satu Kesatuan Biner Mandiri**: Tidak ada ketergantungan pada pustaka runtime eksternal; biner siap pakai di komputer mana pun.
-4. **Estetika & Karakter**: Menggabungkan fungsionalitas terminal hacker yang tangguh dengan animasi fisika modern yang halus.
+1. **Maximum Speed**: Sub-millisecond input latency with direct GPU hardware acceleration.
+2. **Modular Customizability**: Complete user control over aesthetics, colors, keybindings, and physics via Lua.
+3. **Single Self-Contained Binary**: Zero external runtime requirements; run directly anywhere.
+4. **Distinct Aesthetic Identity**: Combining serious developer terminal capabilities with modern physical animation.
 
 ---
 
-## 📄 Lisensi
+## 📄 License
 
-Didistribusikan di bawah lisensi MIT / Apache-2.0. Silakan gunakan, modifikasi, dan distribusikan secara bebas.
-Dikembangkan dengan ❤️ untuk komunitas developer dan terminal enthusiast.
+Distributed under the MIT / Apache-2.0 License. Free to use, modify, and distribute.
+Crafted with ❤️ for developers and terminal enthusiasts.

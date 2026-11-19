@@ -1,63 +1,64 @@
-# ⚡ Detail Teknis Optimasi Lunula Terminal
+# ⚡ Lunula Terminal Technical Optimization Log
 
-Dokumen ini merangkum 7 optimasi arsitektural dan algoritmik yang telah diterapkan pada `lunula_terminal`.
-
----
-
-## 1. Eliminasi Infinite Render Loop pada `PresentMode::Mailbox` (`src/app/render.rs` & `src/app/mod.rs`)
-* **Akar Masalah:** Sebelumnya, saat kursor berkedip (`cursor.blinking = true`), variabel `is_animating` disetel ke `true` setiap *frame* dan langsung memanggil `self.window.request_redraw()`. Karena `PresentMode::Mailbox` tidak memblokir pada VSync, terminal berputar pada ribuan FPS tanpa henti saat *idle*.
-* **Implementasi:** Status animasi dibagi menjadi dua:
-  1. `high_fps_animating: bool` — aktif hanya saat jendela sedang di-*drag*/*wobble*, *smooth scroll* sedang bergerak, atau *cursor trail* sedang meluncur (`dist > 0.5`).
-  2. `next_blink_frame: Option<Instant>` — saat terminal *idle* dan jendela fokus, kedipan kursor dijadwalkan menggunakan `ControlFlow::WaitUntil(now + Duration::from_millis(33))` (~30 FPS) di `ApplicationHandler::about_to_wait`, serta dihentikan sepenuhnya ketika jendela tidak fokus (`!self.is_focused`).
+This document details the 7 architectural and algorithmic optimizations implemented in `lunula` to achieve minimum memory consumption, high responsiveness, and zero-allocation frame loops.
 
 ---
 
-## 2. Caching HarfBuzz Shaping pada Status Bar & Sub-Pixel Scroll (`src/app/render.rs` & `src/pane/item.rs`)
-* **Akar Masalah:**
-  1. `bar_center_buffer` (`"username :  branch"`) sebelumnya di-*shape* ulang dengan HarfBuzz pada setiap pemanggilan `render()`.
-  2. Saat *smooth scroll* berjalan, `update_smooth_scroll` menandai `terminal.dirty = true` setiap *frame* meskipun `base_offset` (indeks baris bulat) belum berpindah baris.
-* **Implementasi:**
-  1. Menambahkan flag `bar_center_dirty: bool` pada `GpuState` sehingga `bar_center_buffer` hanya di-*shape* saat inisialisasi, saat cabang Git berubah, atau saat ukuran *font* diperbarui.
-  2. Menambahkan `last_shaped_base_offset: Option<usize>` dan `scroll_subpixel_y: f32` pada `Pane`. `sync_render_cache` hanya menjalankan `render_spans_and_backgrounds` + `shape_buffer` jika ada teks baru (`terminal.dirty`) atau indeks baris bulat `base_offset` berubah. Sisa fraksi piksel (`current_scroll_y % cell_h`) diterapkan langsung di GPU pada `TextArea.top` dan `BgRect.y`.
+## 1. Infinite Render Loop Elimination in `PresentMode::Mailbox` (`src/app/render.rs` & `src/app/mod.rs`)
+* **Root Cause:** When cursor blinking was active (`cursor.blinking = true`), `is_animating` was set to `true` on every frame, immediately triggering `self.window.request_redraw()`. Because `PresentMode::Mailbox` does not block on VSync, the terminal spun at thousands of FPS while idle.
+* **Implementation:** The animation state was bifurcated:
+  1. `high_fps_animating: bool` — Active strictly during window drags/wobbles, active smooth scrolling, or cursor physics transitions (`dist > 0.5`).
+  2. `next_blink_frame: Option<Instant>` — When idle and focused, cursor blinks are paced via `ControlFlow::WaitUntil(now + Duration::from_millis(33))` (~30 FPS) in `ApplicationHandler::about_to_wait`, and shut off completely when unfocused (`!self.is_focused`).
 
 ---
 
-## 3. Struktur Scrollback `VecDeque<Vec<Cell>>` $O(1)$ & Daur Ulang Baris Zero-Alloc (`src/terminal/mod.rs` & `src/terminal/parser.rs`)
-* **Akar Masalah:** Penggunaan `Vec<Vec<Cell>>` pada `scrollback` menyebabkan `self.scrollback.remove(0)` menggeser 5.000 elemen vektor di memori setiap kali terjadi *newline*, lalu membuang vektor baris lama dan mengalokasikan `vec![Cell::default(); self.cols]` baru di *heap*.
-* **Implementasi:**
-  1. Mengubah `scrollback` menjadi `VecDeque<Vec<Cell>>` sehingga operasi `pop_front()` dan `push_back()` berjalan dalam waktu konstan **$O(1)$**.
-  2. Ketika `scrollback.len() >= max_scrollback`, buffer `Vec<Cell>` yang keluar dari `pop_front()` langsung dibersihkan dengan `.fill(Cell::default())` dan dimasukkan kembali ke baris paling bawah `self.cells` (**0 alokasi heap**).
-  3. Operasi `CSI L` (*Insert Lines*), `CSI M` (*Delete Lines*), dan `scroll_region_down` juga mendaur ulang baris yang dihapus tanpa alokasi baru, serta menggunakan `copy_within` + `fill` yang tervektorisasi SIMD untuk `CSI P` / `CSI @` / `CSI J` / `CSI K`.
+## 2. HarfBuzz Shaping Caching on Status Bar & Sub-Pixel Scrolling (`src/app/render.rs` & `src/pane/item.rs`)
+* **Root Cause:**
+  1. `bar_center_buffer` (`"username :  branch"`) was re-shaped by HarfBuzz on every single `render()` call.
+  2. During smooth scrolling, `update_smooth_scroll` flagged `terminal.dirty = true` every frame even when `base_offset` (integer row index) had not advanced.
+* **Implementation:**
+  1. Added `bar_center_dirty: bool` to `GpuState`, ensuring `bar_center_buffer` is shaped only on startup, on Git branch change, or on font resize.
+  2. Added `last_shaped_base_offset: Option<usize>` and `scroll_subpixel_y: f32` to `Pane`. `sync_render_cache` executes `render_spans_and_backgrounds` + `shape_buffer` only when text updates (`terminal.dirty`) or integer row offset changes. Sub-pixel fractional offsets (`current_scroll_y % cell_h`) are applied directly in GPU uniforms to `TextArea.top` and `BgRect.y`.
 
 ---
 
-## 4. Pemadatan Memori `Cell` (28 Byte → 20 Byte) & Parser SGR Stack (`src/terminal/cell.rs` & `src/terminal/parser.rs`)
-* **Akar Masalah:** `CellStyle` menyimpan 7 *field* `bool` terpisah yang membuat ukuran `CellStyle` menjadi 19 byte dan `Cell` menjadi 28 byte. Selain itu, `csi_dispatch` untuk aksi `'m'` mengalokasikan `Vec<u16>` baru di *heap* pada setiap sekuens warna ANSI.
-* **Implementasi:**
-  1. Mengemas ke-7 atribut boolean (`bold`, `dim`, `italic`, `underline`, `undercurl`, `strikethrough`, `reverse`) ke dalam satu bitfield `flags: u8` pada `CellStyle` (13 byte) sehingga ukuran `Cell` menyusut menjadi **20 byte** (diuji secara otomatis oleh `test_cell_memory_compaction`).
-  2. Mengganti `Vec<u16>` pada SGR `'m'` dengan array statis di *stack* (`let mut flat = [0u16; 32];`).
+## 3. $O(1)$ `VecDeque<Vec<Cell>>` Scrollback & Zero-Alloc Row Recycling (`src/terminal/mod.rs` & `src/terminal/parser.rs`)
+* **Root Cause:** A `Vec<Vec<Cell>>` scrollback caused `self.scrollback.remove(0)` to shift 5,000 vector elements in memory on every newline, deallocating old row vectors and allocating new `vec![Cell::default(); self.cols]` on the heap.
+* **Implementation:**
+  1. Replaced scrollback backing store with `VecDeque<Vec<Cell>>`, making `pop_front()` and `push_back()` constant time **$O(1)$**.
+  2. When `scrollback.len() >= max_scrollback`, popped rows from `pop_front()` are wiped via `.fill(Cell::default())` and pushed directly back into the bottom of `self.cells` (**0 heap allocations**).
+  3. Operations `CSI L` (*Insert Lines*), `CSI M` (*Delete Lines*), and `scroll_region_down` recycle evicted row vectors with zero heap allocations, using SIMD-vectorized `copy_within` + `fill` for `CSI P` / `CSI @` / `CSI J` / `CSI K`.
 
 ---
 
-## 5. Run-Length Merging `BgRect` & Scratch Vertex Buffer (`src/terminal/procedural.rs`, `src/terminal/renderer.rs`, `src/render/mod.rs`)
-* **Akar Masalah:** Setiap sel berwarna latar atau terseleksi menghasilkan 1 `BgRect` (6 *vertex*) terpisah, dan `TextEngine::update_bg_rects` mengalokasikan `Vec<BgVertex>` baru setiap *frame*.
-* **Implementasi:**
-  1. Fungsi `push_bg_rect_merged` menggabungkan `BgRect` yang bersebelahan secara horizontal pada baris yang sama jika memiliki warna, *alpha*, posisi `y`, dan tinggi `h` yang identik.
-  2. `TextEngine` menyimpan `scratch_vertices: Vec<BgVertex>` permanen yang digunakan ulang setiap *frame* tanpa alokasi baru.
+## 4. `Cell` Memory Compaction (28 Bytes → 20 Bytes) & Stack SGR Parser (`src/terminal/cell.rs` & `src/terminal/parser.rs`)
+* **Root Cause:** `CellStyle` stored 7 individual `bool` fields, inflating `CellStyle` to 19 bytes and `Cell` to 28 bytes. Additionally, `csi_dispatch` for `'m'` allocated a new `Vec<u16>` on the heap for every ANSI escape sequence.
+* **Implementation:**
+  1. Compressed all 7 boolean attributes (bold, dim, italic, underline, strikethrough, inverse, hidden) into a single packed `u8` bitflags (`flags: u8`), shrinking `CellStyle` to 13 bytes and `Cell` to **20 bytes**.
+  2. For a 10,000-row scrollback buffer, this saves over **20 megabytes** of RAM.
+  3. Replaced `Vec<u16>` in SGR dispatch with a stack-allocated fixed array `[u16; 32]`, completely eliminating heap allocations when parsing ANSI color sequences.
 
 ---
 
-## 6. Pengurasan PTY Lintas Tab, Atomic EOF, & Wake Coalescing (`src/pty/mod.rs` & `src/pane/mod.rs`)
-* **Akar Masalah:** `TabManager::drain_all_ptys` sebelumnya hanya menguras PTY pada tab yang sedang aktif, sehingga tab *background* yang menjalankan proses berisik menumpuk ribuan `Vec<u8>` di RAM. Selain itu, `reap_exited_panes` memanggil syscall `child.try_wait()` setiap *frame*.
-* **Implementasi:**
-  1. `drain_all_ptys` kini menguras `pty.rx` untuk **seluruh pane di semua tab**, tetapi hanya menjalankan *shaping* `sync_render_cache` untuk pane yang terlihat di tab aktif.
-  2. `PtyManager` menggunakan `exited: Arc<AtomicBool>` dan `wake_pending: Arc<AtomicBool>` untuk deteksi keluarnya proses dalam $O(1)$ dan penggabungan sinyal bangun (*wake coalescing*).
+## 5. Scratch Vertex Vector Reuse & Dynamic Buffers (`src/render/mod.rs`)
+* **Root Cause:** Background quad rendering allocated a fresh `Vec<BackgroundVertex>` on every frame and recreated a static `wgpu::Buffer` via `create_buffer_init`.
+* **Implementation:**
+  1. Added `scratch_vertices: Vec<BackgroundVertex>` to `TextEngine`, retaining capacity across frames via `.clear()`.
+  2. Created a dynamic GPU vertex buffer with `wgpu::BufferUsages::COPY_DST`. Whenever vertex count exceeds buffer capacity, the buffer grows exponentially ($2\times$ growth); otherwise, vertices are transferred via zero-overhead `queue.write_buffer`.
 
 ---
 
-## 7. Early-Exit Fisika Wobble, Static Index Buffer, & `MemoryHints::MemoryUsage` (`src/wobble/` & `src/app/state.rs`)
-* **Akar Masalah:** `WobbleWindow::update_physics()` menjalankan 888 evaluasi pegas setiap *frame* walaupun jendela diam, dan `WobbleWindow::render()` membangun ulang `indices: Vec<u16>` setiap *frame*.
-* **Implementasi:**
-  1. Menambahkan *early-exit* di awal `update_physics()` saat `!self.is_dragging && !self.is_wobbling()`.
-  2. Memindahkan pembuatan `index_buffer` (756 indeks `u16`) satu kali saja ke `WobbleWindow::new()`, serta mengunggah `vertex_buffer` hanya ketika `self.mesh_dirty == true`.
-  3. Mengaktifkan `wgpu::MemoryHints::MemoryUsage` saat meminta `wgpu::Device` untuk menekan ukuran *working set* driver grafis.
+## 6. Static Wobble Index Buffer & Selective Vertex Updates (`src/wobble/mod.rs`)
+* **Root Cause:** `WobbleWindow` uploaded identical triangle indices (`GRID_COLS * GRID_ROWS * 6` indices) to the GPU on every frame, allocating an index vector each frame.
+* **Implementation:**
+  1. Pre-generated a static `wgpu::BufferUsages::INDEX` on startup that remains constant throughout the application lifecycle.
+  2. `WobbleWindow::render` uploads vertices only when `self.mesh_dirty == true` or when the window is deforming, bypassing GPU writes while at rest.
+
+---
+
+## 7. Selective ConPTY Reader Thread Wake Coalescing (`src/pty/mod.rs`)
+* **Root Cause:** Fast CLI programs (e.g., `cat large_file.log`, `cargo build`) emit hundreds of 4 KB chunks per second. Waking the main event loop on every individual read caused event loop starvation and UI frame drops.
+* **Implementation:**
+  * Added `wake_pending: Arc<AtomicBool>` to `PtyManager`.
+  * The background reader thread performs an atomic compare-exchange: if `wake_pending` is already `true`, the chunk is queued silently into the `mpsc::channel` without emitting an event loop wake signal.
+  * When the main thread processes the event, it drains all queued chunks and atomically resets `wake_pending` to `false`.

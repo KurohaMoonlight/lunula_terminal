@@ -47,6 +47,7 @@ pub struct TerminalGrid {
     pub sgr_mouse: bool,
     pub hyperlinks: Vec<String>,
     pub current_hyperlink_idx: u16,
+    pub last_hyperlink_prune_len: usize,
     pub in_sync_update: bool,
     pub sync_update_start: Option<std::time::Instant>,
     pub dirty_rows: Vec<u64>,
@@ -62,6 +63,16 @@ pub struct TerminalGrid {
     pub dcs_graphics_buffer: Vec<u8>,
     /// 16 ANSI Palette colors
     pub palette: [ColorRgb; 16],
+    /// Whether OSC 52 clipboard reading (`OSC 52 ; Pc ; ? ST`) is permitted (default: false for security)
+    pub allow_clipboard_read: bool,
+    /// Combining diacritical marks and zero-width characters attached to (abs_row, col)
+    pub combining_chars: std::collections::HashMap<(usize, usize), Vec<char>>,
+    /// Dynamic foreground color for OSC 10 queries
+    pub fg_color: ColorRgb,
+    /// Dynamic background color for OSC 11 queries
+    pub bg_color: ColorRgb,
+    /// Whether DEC private mode ?1004 (focus reporting) is active
+    pub focus_reporting: bool,
 }
 
 impl TerminalGrid {
@@ -111,6 +122,7 @@ impl TerminalGrid {
             sgr_mouse: false,
             hyperlinks: Vec::new(),
             current_hyperlink_idx: 0,
+            last_hyperlink_prune_len: 0,
             in_sync_update: false,
             sync_update_start: None,
             dirty_rows,
@@ -120,12 +132,22 @@ impl TerminalGrid {
             apc_buffer: None,
             dcs_graphics_buffer: Vec::new(),
             palette: cell::DEFAULT_ANSI_16,
+            allow_clipboard_read: false,
+            combining_chars: std::collections::HashMap::new(),
+            fg_color: ColorRgb { r: 220, g: 215, b: 186 }, // Kanagawa fujiWhite (#DCD7BA)
+            bg_color: ColorRgb { r: 31, g: 31, b: 40 },    // Kanagawa sumiInk1 (#1F1F28)
+            focus_reporting: false,
         }
     }
 
     pub fn set_palette(&mut self, palette: [ColorRgb; 16]) {
         self.palette = palette;
         self.mark_all_rows_dirty();
+    }
+
+    pub fn set_theme_colors(&mut self, fg: ColorRgb, bg: ColorRgb) {
+        self.fg_color = fg;
+        self.bg_color = bg;
     }
 
     #[inline]
@@ -190,10 +212,90 @@ impl TerminalGrid {
             return;
         }
 
-        let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
-        for r in 0..self.rows.min(new_rows) {
-            let copy_len = self.cols.min(new_cols);
-            new_cells[r][..copy_len].copy_from_slice(&self.cells[r][..copy_len]);
+        if self.is_alt_screen {
+            // Full-screen TUI apps (e.g. vim, htop) manage their own screen layouts on resize
+            let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
+            for r in 0..self.rows.min(new_rows) {
+                let copy_len = self.cols.min(new_cols);
+                new_cells[r][..copy_len].copy_from_slice(&self.cells[r][..copy_len]);
+            }
+            self.cells = new_cells;
+        } else {
+            // Standard primary screen: perform smart line reflow across scrollback and visible rows
+            let mut physical_lines: Vec<Vec<Cell>> = self.scrollback.drain(..).collect();
+            physical_lines.extend(self.cells.drain(..));
+
+            // Trim trailing completely empty lines from the bottom of visible screen so content stays in view
+            while physical_lines.len() > 1
+                && physical_lines.last().map_or(false, |row| {
+                    !row.last().map_or(false, |c| c.style.wrapped())
+                        && !row.iter().any(|c| c.c != ' ' || c.style.bg.is_some() || c.hyperlink_idx > 0)
+                })
+            {
+                physical_lines.pop();
+            }
+
+            // 1. Group physical lines into continuous logical lines based on soft-wrapping
+            let mut logical_lines: Vec<Vec<Cell>> = Vec::new();
+            let mut current_logical: Vec<Cell> = Vec::new();
+
+            for row in physical_lines {
+                let was_wrapped = row.last().map_or(false, |c| c.style.wrapped());
+                let content_len = row
+                    .iter()
+                    .rposition(|c| c.c != ' ' || c.style.bg.is_some() || c.hyperlink_idx > 0)
+                    .map_or(0, |i| i + 1);
+                let take_len = if was_wrapped { row.len() } else { content_len };
+
+                current_logical.extend_from_slice(&row[..take_len]);
+
+                if !was_wrapped {
+                    logical_lines.push(std::mem::take(&mut current_logical));
+                }
+            }
+            if !current_logical.is_empty() {
+                logical_lines.push(current_logical);
+            }
+
+            // 2. Re-wrap logical lines to new_cols
+            let mut new_physical_lines: Vec<Vec<Cell>> = Vec::new();
+            for mut logical in logical_lines {
+                if logical.is_empty() {
+                    new_physical_lines.push(vec![Cell::default(); new_cols]);
+                    continue;
+                }
+                while !logical.is_empty() {
+                    if logical.len() > new_cols {
+                        let mut row: Vec<Cell> = logical.drain(..new_cols).collect();
+                        if let Some(last) = row.last_mut() {
+                            last.style.set_wrapped(true);
+                        }
+                        new_physical_lines.push(row);
+                    } else {
+                        let mut row = std::mem::take(&mut logical);
+                        row.resize(new_cols, Cell::default());
+                        new_physical_lines.push(row);
+                    }
+                }
+            }
+
+            // 3. Ensure minimum height
+            while new_physical_lines.len() < new_rows {
+                new_physical_lines.push(vec![Cell::default(); new_cols]);
+            }
+
+            // 4. Distribute into visible cells (last new_rows) and scrollback (preceding)
+            let split_idx = new_physical_lines.len().saturating_sub(new_rows);
+            let visible_part = new_physical_lines.split_off(split_idx);
+            self.cells = visible_part;
+
+            self.scrollback.clear();
+            for line in new_physical_lines {
+                if self.scrollback.len() >= self.max_scrollback {
+                    self.scrollback.pop_front();
+                }
+                self.scrollback.push_back(line);
+            }
         }
 
         if let Some(alt) = &mut self.alt_screen {
@@ -209,9 +311,8 @@ impl TerminalGrid {
         self.rows = new_rows;
         self.scroll_region_top = 0;
         self.scroll_region_bottom = new_rows.saturating_sub(1);
-        self.cursor_x = self.cursor_x.min(new_cols - 1);
-        self.cursor_y = self.cursor_y.min(new_rows - 1);
-        self.cells = new_cells;
+        self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
+        self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
         self.scroll_offset = 0;
         self.target_scroll_y = 0.0;
         self.current_scroll_y = 0.0;
@@ -579,6 +680,125 @@ impl TerminalGrid {
         let start_idx = total_rows.saturating_sub(base_offset + self.rows);
         start_idx + screen_row
     }
+
+    /// Prunes unreferenced hyperlinks from `self.hyperlinks` and remaps all active cell indices.
+    ///
+    /// This prevents unbounded memory growth from evicted scrollback lines and avoids exhausting
+    /// the 16-bit `u16::MAX` index space during long-running terminal sessions.
+    pub fn prune_hyperlinks(&mut self) {
+        if self.hyperlinks.is_empty() {
+            self.current_hyperlink_idx = 0;
+            self.last_hyperlink_prune_len = 0;
+            return;
+        }
+
+        let old_count = self.hyperlinks.len();
+        let mut used = vec![false; old_count + 1];
+
+        // 1. Mark currently active OSC 8 hyperlink if open
+        let cur = self.current_hyperlink_idx as usize;
+        if cur > 0 && cur <= old_count {
+            used[cur] = true;
+        }
+
+        // 2. Mark visible screen cells
+        for row in &self.cells {
+            for cell in row {
+                let idx = cell.hyperlink_idx as usize;
+                if idx > 0 && idx <= old_count {
+                    used[idx] = true;
+                }
+            }
+        }
+
+        // 3. Mark scrollback cells
+        for row in &self.scrollback {
+            for cell in row {
+                let idx = cell.hyperlink_idx as usize;
+                if idx > 0 && idx <= old_count {
+                    used[idx] = true;
+                }
+            }
+        }
+
+        // 4. Mark alternate screen cells if present
+        if let Some(ref alt) = self.alt_screen {
+            for row in alt {
+                for cell in row {
+                    let idx = cell.hyperlink_idx as usize;
+                    if idx > 0 && idx <= old_count {
+                        used[idx] = true;
+                    }
+                }
+            }
+        }
+
+        // Count how many URLs are actively referenced
+        let used_count = used[1..].iter().filter(|&&u| u).count();
+        if used_count == old_count {
+            self.last_hyperlink_prune_len = old_count;
+            return;
+        }
+
+        // Build remapping table: old 1-based index -> new 1-based index (0 if dead)
+        let mut remap = vec![0u16; old_count + 1];
+        let mut new_hyperlinks = Vec::with_capacity(used_count);
+
+        for old_idx in 1..=old_count {
+            if used[old_idx] {
+                new_hyperlinks.push(std::mem::take(&mut self.hyperlinks[old_idx - 1]));
+                remap[old_idx] = new_hyperlinks.len() as u16;
+            }
+        }
+
+        self.hyperlinks = new_hyperlinks;
+        self.last_hyperlink_prune_len = self.hyperlinks.len();
+
+        // Remap current active hyperlink index
+        if cur > 0 && cur <= old_count {
+            self.current_hyperlink_idx = remap[cur];
+        } else {
+            self.current_hyperlink_idx = 0;
+        }
+
+        // Remap visible screen cells
+        for row in &mut self.cells {
+            for cell in row {
+                let idx = cell.hyperlink_idx as usize;
+                if idx > 0 && idx <= old_count {
+                    cell.hyperlink_idx = remap[idx];
+                } else if idx > old_count {
+                    cell.hyperlink_idx = 0;
+                }
+            }
+        }
+
+        // Remap scrollback cells
+        for row in &mut self.scrollback {
+            for cell in row {
+                let idx = cell.hyperlink_idx as usize;
+                if idx > 0 && idx <= old_count {
+                    cell.hyperlink_idx = remap[idx];
+                } else if idx > old_count {
+                    cell.hyperlink_idx = 0;
+                }
+            }
+        }
+
+        // Remap alternate screen cells if present
+        if let Some(ref mut alt) = self.alt_screen {
+            for row in alt {
+                for cell in row {
+                    let idx = cell.hyperlink_idx as usize;
+                    if idx > 0 && idx <= old_count {
+                        cell.hyperlink_idx = remap[idx];
+                    } else if idx > old_count {
+                        cell.hyperlink_idx = 0;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -888,6 +1108,55 @@ mod tests {
     }
 
     #[test]
+    fn test_hyperlinks_pruning_and_scrollback_eviction() {
+        let mut grid = TerminalGrid::new(30, 2);
+        grid.max_scrollback = 2;
+
+        // Line 1: link 1 (destined to be evicted)
+        grid.advance_bytes(b"\x1b]8;;https://dead.com\x1b\\dead\x1b]8;;\x1b\\\r\n");
+        // Line 2: link 2 (destined to be kept)
+        grid.advance_bytes(b"\x1b]8;;https://alive.com\x1b\\alive\x1b]8;;\x1b\\\r\n");
+
+        assert_eq!(grid.hyperlinks.len(), 2);
+
+        // Scroll 5 more blank lines to completely evict line 1 from scrollback (max_scrollback = 2)
+        for _ in 0..5 {
+            grid.advance_bytes(b"line\r\n");
+        }
+
+        // Prune unreferenced links
+        grid.prune_hyperlinks();
+
+        // dead.com was evicted from scrollback and screen, so only alive.com or neither remains
+        assert!(!grid.hyperlinks.iter().any(|u| u == "https://dead.com"));
+
+        // Test CSI 3 J scrollback pruning:
+        // Add a link that stays in scrollback
+        let mut grid2 = TerminalGrid::new(30, 2);
+        grid2.max_scrollback = 5;
+        grid2.advance_bytes(b"\x1b]8;;https://only-in-scrollback.com\x1b\\sb\x1b]8;;\x1b\\\r\n\r\n\r\n");
+        assert_eq!(grid2.hyperlinks.len(), 1);
+
+        // Test CSI 3 J scrollback pruning:
+        // Add a link that gets pushed into scrollback
+        let mut grid2 = TerminalGrid::new(30, 5);
+        grid2.max_scrollback = 10;
+        grid2.advance_bytes(b"\x1b]8;;https://only-in-scrollback.com\x1b\\sb\x1b]8;;\x1b\\\r\n");
+        // Print 7 lines so "sb" is pushed up into scrollback and completely leaves the 5 visible screen rows
+        for _ in 0..7 {
+            grid2.advance_bytes(b"content\r\n");
+        }
+        assert!(!grid2.scrollback.is_empty());
+        assert_eq!(grid2.hyperlinks.len(), 1);
+
+        // Clear scrollback with CSI 3 J
+        grid2.advance_bytes(b"\x1b[3J");
+        assert_eq!(grid2.scrollback.len(), 0);
+        // Scrollback cleared -> prune_hyperlinks called automatically -> hyperlinks table emptied
+        assert_eq!(grid2.hyperlinks.len(), 0);
+    }
+
+    #[test]
     fn test_wide_characters_no_duplicate_spaces() {
         let mut grid = TerminalGrid::new(20, 5);
         grid.advance_bytes("中文".as_bytes());
@@ -1072,7 +1341,7 @@ mod tests {
     fn test_csi_2j_and_3j_standards() {
         let mut grid = TerminalGrid::new(20, 5);
         grid.advance_bytes(b"line 1\r\nline 2\r\nline 3\r\nline 4\r\nline 5\r\nline 6");
-        assert!(grid.scrollback.len() > 0);
+        assert!(!grid.scrollback.is_empty());
 
         // Position cursor at (5, 2)
         grid.advance_bytes(b"\x1b[3;6H");
@@ -1117,5 +1386,99 @@ mod tests {
                 assert_eq!(text, "lunula");
             }
         }
+
+        // OSC 52 query clipboard: disabled by default (security protection against exfiltration)
+        assert!(!grid.allow_clipboard_read);
+        grid.advance_bytes(b"\x1b]52;c;?\x1b\\");
+        assert!(grid.responses.is_empty(), "OSC 52 read must be blocked when allow_clipboard_read is false");
+
+        // OSC 52 query clipboard: when explicitly allowed
+        #[cfg(windows)]
+        {
+            grid.allow_clipboard_read = true;
+            grid.advance_bytes(b"\x1b]52;c;?\x1b\\");
+            let resp = grid.responses.pop().expect("response when allow_clipboard_read is true");
+            assert!(resp.starts_with(b"\x1b]52;c;"));
+            assert!(resp.ends_with(b"\x1b\\"));
+        }
+    }
+
+    #[test]
+    fn test_terminal_line_reflow_on_resize() {
+        let mut grid = TerminalGrid::new(15, 5);
+        // Print 25 characters (exceeds width 15, wraps 15 on row 0, 10 on row 1)
+        grid.advance_bytes(b"abcdefghijklmnopqrstuvwxy");
+        assert_eq!(grid.cells[0][0].c, 'a');
+        assert_eq!(grid.cells[0][14].c, 'o');
+        assert!(grid.cells[0][14].style.wrapped());
+        assert_eq!(grid.cells[1][0].c, 'p');
+        assert_eq!(grid.cells[1][9].c, 'y');
+
+        // Expand width to 30: lines should reflow and unwrap into row 0!
+        grid.resize(30, 5);
+        assert_eq!(grid.cols, 30);
+        let row0: String = grid.cells[0].iter().map(|c| c.c).collect();
+        assert!(row0.starts_with("abcdefghijklmnopqrstuvwxy"));
+
+        // Shrink width back down to 15: lines should re-wrap without losing characters!
+        grid.resize(15, 5);
+        assert_eq!(grid.cols, 15);
+        assert_eq!(grid.cells[0][0].c, 'a');
+        assert_eq!(grid.cells[0][14].c, 'o');
+        assert_eq!(grid.cells[1][0].c, 'p');
+        assert_eq!(grid.cells[1][9].c, 'y');
+    }
+
+    #[test]
+    fn test_combining_diacritics_and_zero_width() {
+        let mut grid = TerminalGrid::new(20, 5);
+        // 'e' followed by combining acute '\u{0301}'
+        grid.advance_bytes("e\u{0301}".as_bytes());
+        assert_eq!(grid.cells[0][0].c, 'e');
+        let extras = grid.combining_chars.get(&(0, 0)).expect("combining char attached");
+        assert_eq!(extras, &vec!['\u{0301}']);
+
+        // Selection should preserve the combining character
+        let pt1 = crate::terminal::selection::SelectionPoint { col: 0, abs_row: 0 };
+        let pt2 = crate::terminal::selection::SelectionPoint { col: 1, abs_row: 0 };
+        grid.selection = Some(crate::terminal::selection::Selection {
+            anchor: pt1,
+            active: pt2,
+        });
+        let text = grid.get_selected_text().unwrap();
+        assert_eq!(text, "e\u{0301}");
+    }
+
+    #[test]
+    fn test_dynamic_osc_theme_colors() {
+        let mut grid = TerminalGrid::new(20, 5);
+        grid.set_theme_colors(
+            ColorRgb { r: 10, g: 20, b: 30 },
+            ColorRgb { r: 40, g: 50, b: 60 },
+        );
+
+        grid.advance_bytes(b"\x1b]10;?\x1b\\");
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b]10;rgb:0a00/1400/1e00\x1b\\");
+
+        grid.advance_bytes(b"\x1b]11;?\x1b\\");
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b]11;rgb:2800/3200/3c00\x1b\\");
+    }
+
+    #[test]
+    fn test_dec_1004_focus_reporting() {
+        let mut grid = TerminalGrid::new(20, 5);
+        assert!(!grid.focus_reporting);
+
+        // Enable focus reporting
+        grid.advance_bytes(b"\x1b[?1004h");
+        assert!(grid.focus_reporting);
+
+        // Query status via DECRQM
+        grid.advance_bytes(b"\x1b[?1004$p");
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b[?1004;1$y");
+
+        // Disable focus reporting
+        grid.advance_bytes(b"\x1b[?1004l");
+        assert!(!grid.focus_reporting);
     }
 }

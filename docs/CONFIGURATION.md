@@ -1,246 +1,204 @@
-# ⚙️ Panduan Konfigurasi Lengkap Lunula Terminal (`lunula.lua`)
+# ⚙️ Lunula Terminal Configuration Guide (`lunula.lua`)
 
-Lunula Terminal dirancang dengan prinsip **Config-as-Code** berbasis Lua yang cepat, modular, dan bertipe kuat. Semua konfigurasi dapat diubah secara langsung dan diterapkan secara instan tanpa perlu menutup terminal (*hot-reload* via `Ctrl + Shift + R` atau tombol Gear `⚙️`).
+Lunula Terminal is built around the **Config-as-Code** philosophy using fast, modular, and strongly-typed Lua 5.4. All settings can be changed and applied instantly without closing the terminal (*hot-reload* via `Ctrl + Shift + R` or the Gear button `⚙️`).
 
 ---
 
-## 📂 Struktur Berkas Konfigurasi Modular
+## 📂 Modular Configuration Structure
 
-Untuk mendukung prinsip *“highly customisable”*, konfigurasi Lunula Terminal dibagi menjadi struktur modular yang bersih:
+To fulfill the *“highly customizable”* principle, Lunula Terminal uses a clean modular structure:
 
 ```text
-lunula/  (atau direktori tempat executable berjalan / ~/.config/lunula/)
-├── lunula.lua           # Berkas konfigurasi utama (Window, Physics, Shell, Font)
-├── colors.lua           # Kustomisasi warna UI & 16 palet warna ANSI terminal
-├── keybinds.lua         # Kustomisasi shortcut keyboard & mouse
-└── themes/              # Direktori tema kustom buatan pengguna
-    └── cyberpunk.lua    # Contoh tema kustom buatan sendiri
+lunula/  (or current executable working directory / %APPDATA%\lunula\)
+├── lunula.lua           # Master configuration (Window, Physics, Shell, Font)
+├── colors.lua           # UI color customization & 16 ANSI terminal palette
+├── keybinds.lua         # Keyboard & mouse shortcut customization
+└── themes/              # User custom themes directory
+    └── cyberpunk.lua    # Example user-created theme
 ```
 
 > [!TIP]
-> Di mana pun Anda membuka terminal (di folder `C:\`, `D:\Project`, atau USB), menekan **tombol Gear (⚙️)** di titlebar atau menekan **`Ctrl + ,`** akan membuka **Settings Modal**, di mana Anda bisa langsung memilih berkas konfigurasi mana yang ingin diedit menggunakan micro-editor bawaan `luna`.
+> Wherever you open the terminal (`C:\`, `D:\Project`, or from a USB drive), clicking the **Gear button (⚙️)** on the title bar or pressing **`Ctrl + ,`** opens the **Settings Modal**, allowing you to pick which configuration file to edit directly using the built-in micro-editor `luna`.
 
 ---
 
-## 📑 Rincian Setiap Opsi di `lunula.lua`
+## 📑 Option Reference in `lunula.lua`
 
-Berikut adalah rincian lengkap setiap bagian parameter di `lunula.lua`:
+Here is the complete reference for every parameter section in `lunula.lua`:
 
-### 1. `theme` (Pilihan Tema Tampilan)
-Menentukan tema warna global untuk Lunula Terminal sekaligus micro-editor `luna`.
+### 1. `theme` (Global Visual Theme)
+Specifies the global color theme for Lunula Terminal and the built-in micro-editor `luna`.
 
 ```lua
 theme = "kanagawa",
 ```
 
-**Pilihan Tema Bawaan (*Built-in Presets*):**
-- `"kanagawa"` *(Default)*: Palet autentik Kanagawa Wave (`#1F1F28`, `#7FB4CA`, `#957FB8`, `#98BB6C`).
-- `"tokyo_night"`: Nuansa malam Tokyo Night Storm (`#24283B`, `#C0CAF5`, `#BB9AF7`, `#9ECE6A`).
-- `"catppuccin"`: Nuansa lembut pastel Catppuccin Mocha (`#1E1E2E`, `#CDD6F4`, `#CBA6F7`, `#89B4FA`).
-- `"gruvbox"`: Nuansa retro hangat Gruvbox Dark (`#282828`, `#EBDBB2`, `#FB4934`, `#83A598`).
-- `"nord"`: Nuansa dingin kutub Nord Frost (`#2E3440`, `#ECEFF4`, `#81A1C1`, `#88C0D0`).
-- **Tema Kustom**: Jika Anda mengisi nama file di folder `themes/` (misal `"cyberpunk"`), Lunula otomatis memuat berkas `themes/cyberpunk.lua`.
+**Built-in Theme Presets:**
+- `"kanagawa"` *(Default)*: Authentic Kanagawa Wave palette (`#1F1F28`, `#7FB4CA`, `#957FB8`, `#98BB6C`).
+- `"tokyo_night"`: Tokyo Night Storm nocturnal aesthetic (`#24283B`, `#C0CAF5`, `#BB9AF7`, `#9ECE6A`).
+- `"catppuccin"`: Soft pastel Catppuccin Mocha (`#1E1E2E`, `#CDD6F4`, `#CBA6F7`, `#89B4FA`).
+- `"gruvbox"`: Warm retro Gruvbox Dark (`#282828`, `#EBDBB2`, `#FB4934`, `#83A598`).
+- `"nord"`: Cool arctic Nord Frost (`#2E3440`, `#ECEFF4`, `#81A1C1`, `#88C0D0`).
+- **Custom Theme**: Entering a theme name located in the `themes/` directory (e.g., `"cyberpunk"`), causes Lunula to automatically load `themes/cyberpunk.lua`.
 
 ---
 
-### 2. `window` (Geometri & Visual Jendela)
-Mengatur dimensi awal, transparansi, dan animasi gelombang di titlebar.
+### 2. `window` (Window Geometry & Visuals)
+Configures initial dimensions, window transparency, and title bar wave animation.
 
 ```lua
 window = {
-    width = "auto",          -- "auto" atau angka pixel (misal 1100)
-    height = "auto",         -- "auto" atau angka pixel (misal 700)
-    width_percent = 0.62,    -- 62% dari lebar layar monitor saat mode "auto"
-    height_percent = 0.68,   -- 68% dari tinggi layar monitor saat mode "auto"
-    lock_size = false,       -- Jika true, ukuran tidak otomatis mengikuti resolusi monitor
-    opacity = 0.95,          -- Transparansi jendela (0.1 = sangat transparan, 1.0 = solid)
-    title = "Lunula Terminal", -- Judul jendela default
-    animate_titlebar = true, -- Animasi gelombang ombak Kanagawa 60 FPS di titlebar
+    width = "auto",            -- "auto" or numeric pixel value (e.g., 1100)
+    height = "auto",           -- "auto" or numeric pixel value (e.g., 700)
+    width_percent = 0.62,      -- 62% of monitor width when in "auto" mode
+    height_percent = 0.68,     -- 68% of monitor height when in "auto" mode
+    lock_size = false,         -- If true, size will not auto-adjust to monitor resolution
+    opacity = 0.95,            -- Window background opacity (0.1 = translucent, 1.0 = solid)
+    title = "Lunula Terminal", -- Default window title
+    animate_titlebar = true,   -- 60 FPS procedural wave animation in title bar
+}
+```
+
+---
+
+### 3. `wobble` (Interactive 2D Jelly Window Physics)
+Calibrates the mass-spring-damper physical simulation responding to window movement and dragging.
+
+```lua
+wobble = {
+    stiffness = 380.0,    -- Spring stiffness (higher = faster oscillation)
+    damping = 18.0,       -- Friction / damping (higher = settles faster without overshooting)
+    max_deform = 22.0,    -- Maximum allowed vertex deformation in pixels
+    spring_shear = 0.12,  -- Corner shear tension coefficient
+}
+```
+
+* **Playful / Super-Jelly Profile**: `stiffness = 220.0`, `damping = 10.0`, `max_deform = 35.0`
+* **Stiff / Corporate Minimal Profile**: `stiffness = 600.0`, `damping = 30.0`, `max_deform = 8.0`
+
+---
+
+### 4. `terminal` (Text Engine & Font Rendering)
+Configures font typography, sizing, and scrollback memory allocation.
+
+```lua
+terminal = {
+    font_family = "Cascadia Code, Consolas, monospace", -- Font family fallback chain
+    font_size = 14.0,                                    -- Font size in points
+    max_scrollback = 10000,                              -- Scrollback buffer line capacity
+    allow_clipboard_read = false,                        -- Allow PTY/remote apps to read clipboard via OSC 52 (default: false for security)
 }
 ```
 
 > [!NOTE]
-> Jika menggunakan laptop hemat baterai, Anda dapat mengubah `animate_titlebar = false`. Terminal akan beralih ke mode hemat daya (*idle wait*) saat tidak ada ketikan.
+> If a font family is not installed on the system, Lunula gracefully falls back through the comma-separated font chain down to standard Windows monospace fonts.
 
 ---
 
-### 3. `wobble` (Fisika Jendela Elastis 2D Jelly)
-Mengontrol simulasi pegas elastis (*mass-spring-damper*) saat jendela digeser (*drag*) atau dilempar.
-
-```lua
-wobble = {
-    stiffness = 420.0,       -- Kekakuan pegas (lebih tinggi = lebih kaku, lebih rendah = lebih jelly)
-    damping = 7.0,           -- Redaman getaran (kecepatan osilasi berhenti)
-    max_deform = 55.0,       -- Deformasi elastis maksimal (dalam pixel) saat digeser kencang
-    spring_shear = 300.0,    -- Kekakuan distorsi geser diagonal
-    wave_reactivity = 1.0,   -- Reaktivitas ombak titlebar terhadap dorongan getaran (0.0 - 3.0)
-}
-```
-
----
-
-### 4. `terminal` (Font & Buffer Teks)
-Mengontrol tipografi monospace dan kapasitas riwayat scrollback.
-
-```lua
-terminal = {
-    font_family = "0xProto Nerd Font Mono", -- Nama font monospace di sistem Anda
-    font_size = 18.0,                        -- Ukuran font (dalam pt)
-    max_scrollback = 5000,                  -- Batas baris riwayat scrollback per split pane
-}
-```
-
----
-
-### 5. `cursor` (Bentuk & Efek Kursor)
-Mengatur tampilan kursor teks terminal dan efek jejak elastis (*Kitty-style elastic cursor trail*).
+### 5. `cursor` (Cursor Appearance & Animations)
+Controls terminal cursor shape, blinking animation, and custom colors.
 
 ```lua
 cursor = {
-    shape = "block",         -- Bentuk kursor: "block", "beam", atau "underline"
-    blinking = true,         -- Animasi kedip lembut (smooth sine wave blinking)
-    color = "#7fb4ca",       -- Warna kursor (hex code atau tabel {r, g, b})
-    trail = true,            -- Mengaktifkan ekor jejak elastis saat kursor melompat
-    trail_stiffness = 550.0, -- Kecepatan ekor kursor mengejar kepala kursor
-    trail_damping = 48.0,    -- Redaman ekor kursor agar tidak bergetar berlebihan
+    shape = "block",          -- "block", "beam", or "underline"
+    blinking = true,          -- Enable periodic blink pacing
+    color = { 255, 158, 59 }, -- RGB color (Kanagawa Surimi Orange)
 }
 ```
 
 ---
 
-### 6. `scroll` (Smooth Sub-Pixel Scrolling)
-Mengatur kehalusan scroll roda mouse.
+### 6. `scroll` (Sub-Pixel Smooth Scrolling)
+Configures inertial scrolling and wheel speed factors.
 
 ```lua
 scroll = {
-    smooth = true,           -- Mengaktifkan interpolasi pixel Y-offset 60-120 FPS
-    speed = 60.0,            -- Kecepatan interpolasi scroll
+    multiplier = 3.0,  -- Lines scrolled per mouse wheel tick
+    smooth = true,     -- Sub-pixel interpolation for butter-smooth scrolling
 }
 ```
 
 ---
 
-### 7. `tabs` (Multi-Tab & Split Panes)
-Mengatur bar navigasi tab dan efek peredupan (*dimming*) pada split pane yang tidak aktif.
+### 7. `tabs` (Multi-Tab Management)
+Configures tab bar behaviors, title truncate width, and close-tab rules.
 
 ```lua
 tabs = {
-    show_single_tab = false, -- Sembunyikan bar tab jika hanya ada 1 tab aktif
-    height = 32.0,           -- Tinggi bar tab dalam pixel
-    dim_inactive_panes = true, -- Redupkan split pane yang sedang tidak fokus
-    dim_opacity = 0.35,      -- Tingkat kegelapan redup (0.0 = terang normal, 0.35 = elegan)
+    max_tabs = 16,     -- Maximum number of open tabs allowed
+    show_index = true, -- Displays numeric index badge [1], [2], ... for quick switching
 }
 ```
 
 ---
 
-### 8. `colors` (Warna UI & Seleksi Teks)
-Menentukan warna seleksi teks mouse. Untuk kustomisasi 16 palet ANSI lengkap, gunakan berkas `colors.lua`.
-
-```lua
-colors = {
-    selection = "#2d4f67",   -- Warna highlight seleksi teks mouse
-}
-```
-
----
-
-### 9. `fetch` (Utilitas Pendamping `lfetch`)
-Mengatur animasi default untuk program fetch 3D bawaan `lfetch`.
-
-```lua
-fetch = {
-    animation = 2,           -- 1 = Ombak Kanagawa & Bulan, 2 = Bulan 3D berotasi & kawah
-    live = true,             -- true = animasi live 60 FPS, false = cetak 1 frame instan (<5ms)
-}
-```
-
----
-
-### 10. `shell` (Program Shell Default)
-Menentukan shell yang dijalankan saat terminal pertama kali dibuka atau saat membuka tab/split pane baru.
+### 8. `shell` (Default Shell & Arguments)
+Specifies which shell to spawn when launching panes and new tabs.
 
 ```lua
 shell = {
-    program = "powershell.exe", -- "powershell.exe", "pwsh.exe", "cmd.exe", "wsl.exe", atau "bash.exe"
-    args = { "-NoLogo" },       -- Argumen startup shell
-}
-```
-
-**Contoh Shell Lain:**
-- **PowerShell 7 (Cross-Platform)**: `program = "pwsh.exe", args = { "-NoLogo" }`
-- **WSL (Ubuntu / Linux)**: `program = "wsl.exe", args = { "~" }`
-- **Command Prompt**: `program = "cmd.exe", args = {}`
-- **Git Bash**: `program = "C:\\Program Files\\Git\\bin\\bash.exe", args = { "--login", "-i" }`
-
----
-
-## 🎨 Kustomisasi 16 Warna ANSI Terminal (`colors.lua`)
-
-Berkas `colors.lua` memungkinkan Anda meng-override ke-16 palet warna terminal yang digunakan oleh perintah CLI (`ls`, `git status`, `cargo`, PowerShell syntax highlighting, `htop`, dll.):
-
-```lua
-return {
-    selection  = "#2D4F67",
-    
-    -- 16 Warna ANSI Standar:
-    ansi = {
-        [0]  = "#16161D", -- Black
-        [1]  = "#C34043", -- Red
-        [2]  = "#76946A", -- Green
-        [3]  = "#C0A36E", -- Yellow
-        [4]  = "#7E9CD8", -- Blue
-        [5]  = "#957FB8", -- Magenta
-        [6]  = "#6A9589", -- Cyan
-        [7]  = "#C8C093", -- White
-        [8]  = "#727169", -- Bright Black
-        [9]  = "#E82424", -- Bright Red
-        [10] = "#98BB6C", -- Bright Green
-        [11] = "#E6C384", -- Bright Yellow
-        [12] = "#7FB4CA", -- Bright Blue
-        [13] = "#D27E99", -- Bright Magenta
-        [14] = "#7AA89F", -- Bright Cyan
-        [15] = "#DCD7BA", -- Bright White
-    },
+    program = "powershell.exe", -- Executable path or name ("powershell.exe", "pwsh.exe", "cmd.exe")
+    args = { "-NoLogo" },       -- Command-line arguments passed to shell process
 }
 ```
 
 ---
 
-## 🎭 Cara Membuat Tema Sendiri di `themes/`
+## 🎨 Customizing 16 ANSI Colors (`colors.lua`)
 
-Anda bisa membuat tema baru tanpa batas! Cukup buat file baru di folder `themes/`, misalnya `themes/matrix.lua`:
+To customize terminal palette colors without touching master configuration, edit `colors.lua`:
 
 ```lua
 return {
-    name = "matrix",
-    bg = "#0d1117",
-    fg = "#00ff66",
-    selection = "#003b1f",
-    cursor = "#00ff66",
-    tab_bar = "#05080c",
-    tab_active = "#161b22",
-    border = "#00ff66",
-    syntax = {
-        keyword = "#00ff66",
-        type = "#39ff14",
-        string = "#79c0ff",
-        number = "#d2a8ff",
-        comment = "#484f58",
-        punctuation = "#8b949e",
-        header = "#56d364",
-    },
+    -- Terminal selection highlight color [R, G, B]
+    selection = { 45, 79, 103 },
+
+    -- Optional background/foreground overrides
+    background = nil,  -- Use default theme background or set { 30, 30, 46 }
+    foreground = nil,  -- Use default theme foreground or set { 205, 214, 244 }
+
+    -- 16 ANSI Colors (0-15: Normal and Bright colors)
     ansi = {
-        [0] = "#0d1117", [1] = "#ff7b72", [2] = "#3fb950", [3] = "#d29922",
-        [4] = "#58a6ff", [5] = "#bc8cff", [6] = "#39c5cf", [7] = "#b1bac4",
-        [8] = "#484f58", [9] = "#ffa198", [10] = "#56d364", [11] = "#e3b341",
-        [12] = "#79c0ff", [13] = "#d2a8ff", [14] = "#56d4dd", [15] = "#f0f6fc",
+        [0]  = { 22, 22, 29 },    -- Black (sumiInk0)
+        [1]  = { 195, 64, 67 },   -- Red (autumnRed)
+        [2]  = { 152, 187, 108 }, -- Green (springGreen)
+        [3]  = { 230, 195, 132 }, -- Yellow (boatYellow2)
+        [4]  = { 126, 156, 216 }, -- Blue (crystalBlue)
+        [5]  = { 149, 127, 184 }, -- Magenta (oniViolet)
+        [6]  = { 122, 168, 159 }, -- Cyan (waveAqua1)
+        [7]  = { 220, 215, 186 }, -- White (fujiWhite)
+        [8]  = { 114, 113, 105 }, -- Bright Black (fujiGray)
+        [9]  = { 232, 131, 108 }, -- Bright Red (surimiOrange)
+        [10] = { 152, 187, 108 }, -- Bright Green (springGreen)
+        [11] = { 230, 195, 132 }, -- Bright Yellow (boatYellow2)
+        [12] = { 127, 180, 202 }, -- Bright Blue (springBlue)
+        [13] = { 147, 138, 169 }, -- Bright Magenta (springViolet1)
+        [14] = { 122, 168, 159 }, -- Bright Cyan (waveAqua2)
+        [15] = { 242, 241, 235 }, -- Bright White (oldWhite)
     }
 }
 ```
 
-Lalu di `lunula.lua`, set:
+---
+
+## ⌨️ Customizing Keyboard Shortcuts (`keybinds.lua`)
+
+Map any key combination directly to actions in `keybinds.lua`:
+
 ```lua
-theme = "matrix",
+return {
+    ["Ctrl+Shift+T"]   = "new_tab",
+    ["Ctrl+Shift+W"]   = "close_pane",
+    ["Ctrl+Tab"]       = "next_tab",
+    ["Ctrl+Shift+Tab"] = "prev_tab",
+    ["Ctrl+Shift+E"]   = "split_vertical",
+    ["Ctrl+Shift+D"]   = "split_horizontal",
+    ["Ctrl+Shift+F"]   = "search",
+    ["Ctrl+Shift+R"]   = "reload_config",
+    ["Ctrl+Shift+H"]   = "toggle_help",
+    ["Ctrl+,"]         = "toggle_settings",
+    ["F11"]            = "toggle_fullscreen",
+}
 ```
-Tekan `Ctrl + Shift + R`, dan terminal Anda seketika bertema **Matrix**!
+
+Whenever you save `keybinds.lua`, Lunula Terminal automatically reloads the bindings and updates the Help Modal overlay immediately!
