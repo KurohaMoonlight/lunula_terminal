@@ -232,6 +232,14 @@ impl Pane {
             received = true;
         }
 
+        // Process binary-safe IPC packets (e.g. Kitty Graphics from limg) strictly after
+        // pending ConPTY output has updated cursor_x/cursor_y, then ACK the sender.
+        while let Ok((ipc_bytes, ack_tx)) = self.pty.ipc_rx.try_recv() {
+            self.terminal.handle_ipc_bytes(&ipc_bytes);
+            let _ = ack_tx.send(());
+            received = true;
+        }
+
         if !self.terminal.responses.is_empty() {
             for resp in self.terminal.responses.drain(..) {
                 self.pty.write_bytes(&resp);

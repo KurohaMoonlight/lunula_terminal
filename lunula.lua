@@ -14,6 +14,7 @@ return {
         lock_size = false,      -- Jika true, ukuran tidak otomatis menyesuaikan layar
         opacity = 0.95,         -- Transparansi jelly window (0.1 - 1.0)
         title = "Lunula Terminal",
+        animate_titlebar = true, -- Animasi 60 FPS gelombang ombak Kanagawa di titlebar (false = hemat baterai laptop)
     },
     wobble = {
         -- Kekakuan spring: Lebih tinggi = lebih kaku, Lebih rendah = lebih bergetar/jelly

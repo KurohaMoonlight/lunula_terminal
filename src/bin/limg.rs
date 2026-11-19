@@ -8,7 +8,7 @@
 
 use std::env;
 use std::ffi::c_void;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
@@ -187,9 +187,8 @@ fn load_image_rgba(path: &Path, max_dim: u32) -> Result<(u32, u32, Vec<u8>), Str
         );
 
         if status != 0 || data.scan0.is_null() {
-            if needs_dispose {
-                GdipDisposeImage(final_bitmap);
-            }
+            let _ = needs_dispose;
+            GdipDisposeImage(final_bitmap);
             GdiplusShutdown(token);
             return Err("Failed to lock bitmap bits".into());
         }
@@ -269,27 +268,30 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-fn get_terminal_cols() -> usize {
+fn get_terminal_size() -> (usize, usize) {
     unsafe {
         let handle = GetStdHandle(-11); // STD_OUTPUT_HANDLE
         let mut csbi: ConsoleScreenBufferInfo = std::mem::zeroed();
         if GetConsoleScreenBufferInfo(handle, &mut csbi) != 0 {
-            let width = (csbi.window.right - csbi.window.left + 1) as usize;
-            if width >= 20 {
-                return width;
-            }
+            let width = (csbi.window.right - csbi.window.left + 1).max(20) as usize;
+            let height = (csbi.window.bottom - csbi.window.top + 1).max(10) as usize;
+            return (width, height);
         }
     }
-    80
+    (80, 24)
 }
 
 fn clear_images() {
-    let payload = b"\x1b_Ga=d,d=a;\x1b\\";
+    let payload = b"\x1b_Ga=d,d=a,q=2;\x1b\\";
     if let Ok(port_str) = env::var("LUNULA_IPC_PORT") {
         if let Ok(port) = port_str.parse::<u16>() {
             if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
                 let _ = stream.write_all(payload);
                 let _ = stream.flush();
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                let mut ack = [0u8; 1];
+                let _ = stream.read(&mut ack);
                 return;
             }
         }
@@ -394,13 +396,12 @@ fn main() {
         return;
     }
 
-    // Default column width: fit terminal nicely (up to 60 cols)
-    let term_cols = get_terminal_cols();
-    let display_cols = cols.unwrap_or_else(|| (term_cols.saturating_sub(4)).clamp(30, 60));
-    // Downsample resolution proportional to display size (up to 960px)
-    let max_render_dim = (display_cols as u32 * 24).clamp(400, 960);
+    // Fit image cleanly within current terminal viewport (auto-cut)
+    let (term_cols, term_rows) = get_terminal_size();
+    let max_cols = (term_cols.saturating_sub(6)).clamp(20, 56);
+    let max_rows = (term_rows.saturating_sub(6)).clamp(8, 16);
 
-    let (target_w, target_h, rgba_data) = match load_image_rgba(file_path, max_render_dim) {
+    let (target_w, target_h, rgba_data) = match load_image_rgba(file_path, 960) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("\x1b[31mError decoding '{}': {}\x1b[0m", image_path_str, e);
@@ -408,17 +409,41 @@ fn main() {
         }
     };
 
-    // Calculate aspect-ratio-preserving rows if not specified
-    // Standard terminal cell aspect ratio is ~1:2 (width:height)
-    let display_rows = rows.unwrap_or_else(|| {
-        let cell_aspect = 0.5f32; // cell width / cell height
-        let r = (display_cols as f32 * (target_h as f32 / target_w as f32) * cell_aspect).round();
-        (r as usize).max(1)
-    });
+    // Terminal cell aspect ratio (cell_width / cell_height ~ 0.43 at 1.5x line height)
+    let cell_aspect = 0.43f32;
+    let pixel_aspect = target_w as f32 / target_h as f32;
+    // Columns per row needed to render undistorted
+    let cell_ratio = (pixel_aspect / cell_aspect).max(0.1);
+
+    let (display_cols, display_rows) = match (cols, rows) {
+        (Some(c), Some(r)) => (c.max(1), r.max(1)),
+        (Some(c), None) => {
+            let c = c.max(1);
+            let r = (c as f32 / cell_ratio).round().max(1.0) as usize;
+            (c, r)
+        }
+        (None, Some(r)) => {
+            let r = r.max(1);
+            let c = (r as f32 * cell_ratio).round().max(1.0) as usize;
+            (c, r)
+        }
+        (None, None) => {
+            // Auto-fit inside max_cols and max_rows cleanly
+            let mut r = max_rows as f32;
+            let mut c = r * cell_ratio;
+            if c > max_cols as f32 {
+                c = max_cols as f32;
+                r = c / cell_ratio;
+            }
+            let c = c.round().clamp(10.0, max_cols as f32) as usize;
+            let r = r.round().clamp(6.0, max_rows as f32) as usize;
+            (c, r)
+        }
+    };
 
     let b64 = encode_base64(&rgba_data);
     let ctrl_str = format!(
-        "a=t,f=32,s={},v={},c={},r={}",
+        "a=t,f=32,q=2,s={},v={},c={},r={}",
         target_w, target_h, display_cols, display_rows
     );
 
@@ -448,6 +473,12 @@ fn main() {
         if let Ok(port) = port_str.parse::<u16>() {
             if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
                 if stream.write_all(payload.as_bytes()).is_ok() && stream.flush().is_ok() {
+                    // Signal EOF on write half and wait for Lunula main thread ACK so the image
+                    // is anchored at the exact prompt row BEFORE println!() advances the cursor.
+                    let _ = stream.shutdown(std::net::Shutdown::Write);
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                    let mut ack = [0u8; 1];
+                    let _ = stream.read(&mut ack);
                     delivered_via_ipc = true;
                 }
             }

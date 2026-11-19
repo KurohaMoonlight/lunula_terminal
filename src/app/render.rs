@@ -33,7 +33,7 @@ impl GpuState {
         let visible_leaves = active_tab.root.all_leaves();
 
         let mut high_fps_animating = self.wobble.is_dragging || wobble_active;
-        let mut needs_blink_timer = true; // Animate Kanagawa ink wave continuously
+        let mut needs_blink_timer = self.config.window.animate_titlebar;
 
         for &id in &visible_leaves {
             if let Some(pane) = self.tab_manager.panes.get_mut(&id) {
@@ -221,51 +221,72 @@ impl GpuState {
             });
 
             let mut pill_x = 10.0;
-            let pill_w = 140.0;
-            for (idx, _t) in self.tab_manager.tabs.iter().enumerate() {
+            for (idx, t) in self.tab_manager.tabs.iter().enumerate() {
                 let is_active = idx == self.tab_manager.active_tab_index;
-                let bg_col = if is_active {
-                    terminal::ColorRgb { r: 45, g: 79, b: 103 } // waveBlue2
+                let pill_w = t.width;
+                let is_hover = content_mouse[0] >= pill_x
+                    && content_mouse[0] <= pill_x + pill_w
+                    && content_mouse[1] >= tab_bar_y + 3.0
+                    && content_mouse[1] <= tab_bar_y + tab_bar_h - 3.0;
+
+                let (bg_col, bg_alpha) = if is_active {
+                    (
+                        terminal::ColorRgb { r: 45, g: 79, b: 103 }, // waveBlue2 (#2D4F67)
+                        0.95,
+                    )
+                } else if is_hover {
+                    (
+                        terminal::ColorRgb { r: 34, g: 34, b: 44 }, // sumiInk3
+                        0.80,
+                    )
                 } else {
-                    terminal::ColorRgb { r: 42, g: 42, b: 55 } // sumiInk4
+                    (
+                        terminal::ColorRgb { r: 24, g: 24, b: 32 }, // sumiInk2
+                        0.50,
+                    )
                 };
+
+                // Sleek pill background
                 bg_rects.push(terminal::BgRect {
                     x: pill_x,
-                    y: tab_bar_y + 4.0,
+                    y: tab_bar_y + 3.0,
                     w: pill_w,
-                    h: tab_bar_h - 8.0,
+                    h: tab_bar_h - 6.0,
                     color: bg_col,
-                    alpha: if is_active { 0.95 } else { 0.70 },
+                    alpha: bg_alpha,
                 });
 
+                // Active bottom highlight indicator (sleek 2px springBlue)
                 if is_active {
                     bg_rects.push(terminal::BgRect {
-                        x: pill_x + 4.0,
+                        x: pill_x + 2.0,
                         y: tab_bar_y + tab_bar_h - 3.0,
-                        w: pill_w - 8.0,
+                        w: pill_w - 4.0,
                         h: 2.0,
-                        color: terminal::ColorRgb { r: 127, g: 180, b: 202 }, // springBlue
+                        color: terminal::ColorRgb { r: 127, g: 180, b: 202 }, // springBlue (#7FB4CA)
                         alpha: 1.0,
                     });
                 }
-                pill_x += pill_w + 6.0;
+                pill_x += pill_w + 4.0;
             }
 
+            let plus_w = 26.0;
             let is_plus_hover = content_mouse[0] >= pill_x
-                && content_mouse[0] <= pill_x + 32.0
-                && content_mouse[1] >= tab_bar_y + 4.0
-                && content_mouse[1] <= tab_bar_y + tab_bar_h - 4.0;
+                && content_mouse[0] <= pill_x + plus_w
+                && content_mouse[1] >= tab_bar_y + 3.0
+                && content_mouse[1] <= tab_bar_y + tab_bar_h - 3.0;
+
             bg_rects.push(terminal::BgRect {
                 x: pill_x,
-                y: tab_bar_y + 4.0,
-                w: 32.0,
-                h: tab_bar_h - 8.0,
+                y: tab_bar_y + 3.0,
+                w: plus_w,
+                h: tab_bar_h - 6.0,
                 color: if is_plus_hover {
                     terminal::ColorRgb { r: 45, g: 79, b: 103 } // waveBlue2
                 } else {
-                    terminal::ColorRgb { r: 42, g: 42, b: 55 } // sumiInk4
+                    terminal::ColorRgb { r: 28, g: 28, b: 36 } // sumiInk2
                 },
-                alpha: if is_plus_hover { 0.90 } else { 0.70 },
+                alpha: if is_plus_hover { 0.90 } else { 0.45 },
             });
         }
 
@@ -723,31 +744,79 @@ impl GpuState {
         self.text_engine
             .update_bg_rects(&self.device, &self.queue, &bg_rects);
 
-        // Upload Kitty Graphics images for visible panes
+        // Upload Kitty Graphics images for visible panes (with smooth scroll, aspect-ratio fit, & pane clipping)
+        let mut live_image_ids = std::collections::HashSet::new();
+        for pane in self.tab_manager.panes.values() {
+            for img in &pane.terminal.graphics.images {
+                live_image_ids.insert(img.id);
+            }
+        }
         let mut image_draw_requests = Vec::new();
         for &id in &visible_leaves {
             if let Some(pane) = self.tab_manager.panes.get(&id) {
-                let pane_x = pane.rect[0] + pane::PANE_PAD;
-                let pane_y = pane.rect[1] + pane::PANE_PAD;
+                let px = pane.rect[0];
+                let py = pane.rect[1];
+                let pw = pane.rect[2];
+                let ph = pane.rect[3];
+                let clip_x0 = px + pane::PANE_PAD;
+                let clip_y0 = py + pane::PANE_PAD;
+                let clip_x1 = px + pw - pane::PANE_PAD;
+                let clip_y1 = py + ph - pane::PANE_PAD;
+
                 let scrollback_len = pane.terminal.scrollback.len();
-                let scroll_offset = pane.terminal.scroll_offset;
-                let rows = pane.terminal.rows;
+                let effective_base = if pane.terminal.current_scroll_y > 0.0 {
+                    (pane.terminal.current_scroll_y / cell_h.max(1.0)).floor() as usize
+                } else {
+                    pane.terminal.scroll_offset
+                };
+                let doc_start = scrollback_len.saturating_sub(effective_base);
+                let sub_y = pane.scroll_subpixel_y;
 
                 for img in &pane.terminal.graphics.images {
-                    let doc_start = scrollback_len.saturating_sub(scroll_offset);
-                    if img.abs_row + img.height_cells > doc_start && img.abs_row < doc_start + rows {
-                        let screen_row = img.abs_row as f32 - doc_start as f32;
-                        let x = pane_x + img.col as f32 * cell_w;
-                        let y = pane_y + screen_row * cell_h;
-                        let w = img.width_cells as f32 * cell_w;
-                        let h = img.height_cells as f32 * cell_h;
-                        image_draw_requests.push((img, x, y, w, h));
+                    let screen_row = img.abs_row as f32 - doc_start as f32;
+                    let box_w = (img.width_cells as f32 * cell_w).max(1.0);
+                    let box_h = (img.height_cells as f32 * cell_h).max(1.0);
+
+                    // Preserve exact native pixel aspect ratio inside the requested cell box (strict fit-contain)
+                    let (w, h) = if img.pixel_width > 0 && img.pixel_height > 0 {
+                        let scale_x = box_w / img.pixel_width as f32;
+                        let scale_y = box_h / img.pixel_height as f32;
+                        let scale = scale_x.min(scale_y);
+                        (
+                            (img.pixel_width as f32 * scale).min(box_w),
+                            (img.pixel_height as f32 * scale).min(box_h),
+                        )
+                    } else {
+                        (box_w, box_h)
+                    };
+
+                    let raw_x0 = clip_x0 + img.col as f32 * cell_w;
+                    let raw_y0 = clip_y0 + screen_row * cell_h - sub_y;
+                    let raw_x1 = raw_x0 + w;
+                    let raw_y1 = raw_y0 + h;
+
+                    // Clip quad & UVs cleanly to pane viewport so images never bleed into titlebar/tab bar
+                    let cx0 = raw_x0.max(clip_x0);
+                    let cy0 = raw_y0.max(clip_y0);
+                    let cx1 = raw_x1.min(clip_x1);
+                    let cy1 = raw_y1.min(clip_y1);
+
+                    if cx1 > cx0 && cy1 > cy0 {
+                        let u0 = (cx0 - raw_x0) / w;
+                        let u1 = (cx1 - raw_x0) / w;
+                        let v0 = (cy0 - raw_y0) / h;
+                        let v1 = (cy1 - raw_y0) / h;
+                        image_draw_requests.push((img, [cx0, cy0, cx1, cy1], [u0, v0, u1, v1]));
                     }
                 }
             }
         }
-        self.text_engine
-            .update_images(&self.device, &self.queue, image_draw_requests);
+        self.text_engine.update_images(
+            &self.device,
+            &self.queue,
+            image_draw_requests,
+            &live_image_ids,
+        );
 
         // Prepare Text Areas
         let mut areas = Vec::with_capacity(visible_leaves.len() + 6);
@@ -826,18 +895,43 @@ impl GpuState {
 
         if tab_bar_visible {
             let tab_bar_y = 48.0;
+            let mut pill_x = 10.0;
+            for (idx, tab) in self.tab_manager.tabs.iter().enumerate() {
+                let is_active = idx == self.tab_manager.active_tab_index;
+                let pill_w = tab.width;
+                areas.push(glyphon::TextArea {
+                    buffer: &tab.buffer,
+                    left: pill_x + 10.0,
+                    top: tab_bar_y + 6.0,
+                    scale: 1.0,
+                    bounds: glyphon::TextBounds {
+                        left: pill_x as i32,
+                        top: tab_bar_y as i32,
+                        right: (pill_x + pill_w) as i32,
+                        bottom: (tab_bar_y + tab_bar_h) as i32,
+                    },
+                    default_color: if is_active {
+                        glyphon::Color::rgb(220, 215, 186)
+                    } else {
+                        glyphon::Color::rgb(140, 140, 135)
+                    },
+                    custom_glyphs: &[],
+                });
+                pill_x += pill_w + 4.0;
+            }
+
             areas.push(glyphon::TextArea {
-                buffer: &self.tab_manager.tab_bar_buffer,
-                left: 0.0,
+                buffer: &self.tab_manager.plus_buffer,
+                left: pill_x + 9.0,
                 top: tab_bar_y + 6.0,
                 scale: 1.0,
                 bounds: glyphon::TextBounds {
-                    left: 0,
+                    left: pill_x as i32,
                     top: tab_bar_y as i32,
-                    right: content_w as i32,
+                    right: (pill_x + 26.0) as i32,
                     bottom: (tab_bar_y + tab_bar_h) as i32,
                 },
-                default_color: glyphon::Color::rgb(220, 215, 186),
+                default_color: glyphon::Color::rgb(127, 180, 202),
                 custom_glyphs: &[],
             });
         }
@@ -903,11 +997,14 @@ impl GpuState {
                     )
                 };
 
-                let spans = [(
-                    status_text,
-                    terminal::CellStyle::new().with_fg(status_color).with_bold(true),
-                )];
-                self.text_engine.shape_buffer(&mut self.vi_status_buffer, &spans);
+                if self.last_vi_status != status_text {
+                    let spans = [(
+                        status_text.clone(),
+                        terminal::CellStyle::new().with_fg(status_color).with_bold(true),
+                    )];
+                    self.text_engine.shape_buffer(&mut self.vi_status_buffer, &spans);
+                    self.last_vi_status = status_text;
+                }
 
                 areas.push(glyphon::TextArea {
                     buffer: &self.vi_status_buffer,

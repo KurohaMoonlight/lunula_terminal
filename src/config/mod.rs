@@ -118,6 +118,9 @@ impl LunulaConfig {
                 if let Ok(title) = w_val.get::<String>("title") {
                     config.window.title = title;
                 }
+                if let Ok(anim) = w_val.get::<bool>("animate_titlebar") {
+                    config.window.animate_titlebar = anim;
+                }
             }
 
             if let Ok(w_val) = table.get::<Table>("wobble") {

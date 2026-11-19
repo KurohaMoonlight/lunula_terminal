@@ -237,6 +237,30 @@ impl KittyGraphicsManager {
         }
     }
 
+    /// Shifts all image placements upward by `lines` rows when the top row is dropped
+    /// without growing `scrollback` (e.g. blank-line discard or `max_scrollback` eviction),
+    /// pruning any images that have scrolled completely out of history.
+    pub fn shift_rows_up(&mut self, lines: usize) {
+        if lines == 0 || self.images.is_empty() {
+            return;
+        }
+        self.images.retain_mut(|img| {
+            let bottom = img.abs_row + img.height_cells;
+            if bottom <= lines {
+                false
+            } else {
+                if img.abs_row >= lines {
+                    img.abs_row -= lines;
+                } else {
+                    let clip = lines - img.abs_row;
+                    img.abs_row = 0;
+                    img.height_cells = img.height_cells.saturating_sub(clip);
+                }
+                img.height_cells > 0
+            }
+        });
+    }
+
     fn handle_delete(
         &mut self,
         params: &KittyControlParams,

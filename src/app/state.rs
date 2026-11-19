@@ -44,6 +44,7 @@ pub struct GpuState {
     pub help_visible: bool,
     pub help_buffer: glyphon::Buffer,
     pub vi_status_buffer: glyphon::Buffer,
+    pub last_vi_status: String,
     pub help_scroll_y: f32,
     pub help_total_height: f32,
     pub help_dragging_scrollbar: bool,
@@ -242,6 +243,7 @@ impl GpuState {
             help_visible: false,
             help_buffer,
             vi_status_buffer,
+            last_vi_status: String::new(),
             help_scroll_y: 0.0,
             help_total_height,
             help_dragging_scrollbar: false,
@@ -324,6 +326,24 @@ impl GpuState {
                     .update_font_family(&new_cfg.terminal.font_family);
             }
             self.text_engine.update_font_size(new_cfg.terminal.font_size);
+            let new_metrics = glyphon::Metrics::new(
+                self.text_engine.font_size,
+                self.text_engine.line_height,
+            );
+            self.help_buffer.set_metrics(new_metrics);
+            self.bar_center_buffer.set_metrics(new_metrics);
+            self.bar_clock_buffer.set_metrics(new_metrics);
+            self.bar_gear_buffer.set_metrics(new_metrics);
+            self.bar_help_buffer.set_metrics(new_metrics);
+            self.vi_status_buffer.set_metrics(new_metrics);
+            for tab in &mut self.tab_manager.tabs {
+                tab.buffer.set_metrics(new_metrics);
+            }
+            self.tab_manager.plus_buffer.set_metrics(new_metrics);
+            for pane in self.tab_manager.panes.values_mut() {
+                pane.buffer.set_metrics(new_metrics);
+                pane.terminal.mark_all_rows_dirty();
+            }
             self.help_total_height =
                 build_help_buffer(&mut self.text_engine, &mut self.help_buffer);
             self.bar_center_dirty = true;

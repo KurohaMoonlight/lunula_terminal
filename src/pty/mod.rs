@@ -19,6 +19,7 @@ pub struct PtyManager {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     pub rx: Receiver<Vec<u8>>,
+    pub ipc_rx: Receiver<(Vec<u8>, std::sync::mpsc::Sender<()>)>,
     pub exited: Arc<AtomicBool>,
     pub wake_pending: Arc<AtomicBool>,
 }
@@ -83,6 +84,7 @@ impl PtyManager {
         let writer = pair.master.take_writer()?;
 
         let (tx, rx) = channel();
+        let (ipc_tx, ipc_rx) = channel::<(Vec<u8>, std::sync::mpsc::Sender<()>)>();
         let exited = Arc::new(AtomicBool::new(false));
         let wake_pending = Arc::new(AtomicBool::new(false));
 
@@ -114,7 +116,7 @@ impl PtyManager {
             })?;
 
         if let Some(listener) = ipc_listener_opt {
-            let tx_ipc = tx;
+            let tx_ipc = ipc_tx;
             let proxy_ipc = proxy;
             let wake_ipc = Arc::clone(&wake_pending);
             let exited_ipc = Arc::clone(&exited);
@@ -126,17 +128,22 @@ impl PtyManager {
                         if exited_ipc.load(Ordering::Acquire) {
                             break;
                         }
-                        let mut buf = [0u8; 65536];
-                        while let Ok(n) = stream.read(&mut buf) {
-                            if n == 0 {
-                                break;
-                            }
-                            if tx_ipc.send(buf[..n].to_vec()).is_err() {
+                        // Read the complete IPC payload before forwarding so it can never
+                        // interleave mid-sequence with asynchronous ConPTY output.
+                        let mut payload = Vec::new();
+                        let _ = stream.read_to_end(&mut payload);
+                        if !payload.is_empty() {
+                            let (ack_tx, ack_rx) = channel::<()>();
+                            if tx_ipc.send((payload, ack_tx)).is_err() {
                                 break;
                             }
                             if !wake_ipc.swap(true, Ordering::AcqRel) {
                                 let _ = proxy_ipc.send_event(());
                             }
+                            // Wait for main thread to anchor the image at the current cursor row
+                            let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(2));
+                            let _ = stream.write_all(b"K");
+                            let _ = stream.flush();
                         }
                     }
                 })?;
@@ -147,6 +154,7 @@ impl PtyManager {
             writer,
             child,
             rx,
+            ipc_rx,
             exited,
             wake_pending,
         })

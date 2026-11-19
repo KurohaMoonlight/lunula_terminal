@@ -26,6 +26,8 @@ pub struct Tab {
     pub name: String,
     pub root: PaneNode,
     pub active_pane_id: usize,
+    pub buffer: Buffer,
+    pub width: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,13 +42,48 @@ pub enum PaneClickResult {
     ClosePane(usize),
 }
 
+/// Cleans and formats raw process / directory window titles into sleek, readable tab titles.
+/// e.g. "C:\WINDOWS\system32\WindowsPowerShell\v1.0\powershell.exe" -> "pwsh",
+///      "C:\Users\kuroha\Pictures" -> "Pictures",
+///      "longname12345678" -> "longname1…".
+pub fn clean_tab_title(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "pwsh".to_string();
+    }
+    let lower = trimmed.to_lowercase();
+    if lower.contains("powershell") || lower.contains("pwsh") {
+        return "pwsh".to_string();
+    }
+    if lower == "cmd" || lower.ends_with("\\cmd.exe") || lower.ends_with("/cmd.exe") {
+        return "cmd".to_string();
+    }
+
+    let norm = trimmed.replace('\\', "/");
+    let base = norm.trim_end_matches('/').split('/').last().unwrap_or(trimmed);
+    let stripped = base.strip_suffix(".exe").unwrap_or(base);
+    let s_clean = stripped.trim();
+    if s_clean.is_empty() {
+        return "pwsh".to_string();
+    }
+
+    let count = s_clean.chars().count();
+    if count > 10 {
+        let mut s: String = s_clean.chars().take(9).collect();
+        s.push('…');
+        s
+    } else {
+        s_clean.to_string()
+    }
+}
+
 pub struct TabManager {
     pub tabs: Vec<Tab>,
     pub panes: HashMap<usize, Pane>,
     pub active_tab_index: usize,
     pub next_pane_id: usize,
     pub next_tab_id: usize,
-    pub tab_bar_buffer: Buffer,
+    pub plus_buffer: Buffer,
     pub separators: Vec<(SplitDirection, [f32; 4])>,
     pub proxy: EventLoopProxy<()>,
 }
@@ -83,9 +120,11 @@ impl TabManager {
             name: "pwsh".to_string(),
             root: PaneNode::Leaf(pane_id),
             active_pane_id: pane_id,
+            buffer: text_engine.create_buffer(),
+            width: 80.0,
         };
 
-        let tab_bar_buffer = text_engine.create_buffer();
+        let plus_buffer = text_engine.create_buffer();
 
         let mut mgr = Self {
             tabs: vec![initial_tab],
@@ -93,7 +132,7 @@ impl TabManager {
             active_tab_index: 0,
             next_pane_id: 1,
             next_tab_id: 1,
-            tab_bar_buffer,
+            plus_buffer,
             separators: Vec::new(),
             proxy,
         };
@@ -156,6 +195,8 @@ impl TabManager {
             name: "pwsh".to_string(),
             root: PaneNode::Leaf(pane_id),
             active_pane_id: pane_id,
+            buffer: text_engine.create_buffer(),
+            width: 80.0,
         };
 
         self.tabs.push(new_tab);
@@ -349,35 +390,33 @@ impl TabManager {
 
     pub fn shape_tab_bar(&mut self, text_engine: &mut TextEngine, config: &LunulaConfig) {
         if self.tab_bar_visible(config) {
-            let mut spans = Vec::with_capacity(self.tabs.len() + 1);
-            for (idx, t) in self.tabs.iter().enumerate() {
+            let cell_w = text_engine.cell_width;
+            for (idx, t) in self.tabs.iter_mut().enumerate() {
                 let is_active = idx == self.active_tab_index;
                 let fg = if is_active {
-                    ColorRgb { r: 220, g: 215, b: 186 }
+                    ColorRgb { r: 220, g: 215, b: 186 } // fujiWhite
                 } else {
-                    ColorRgb { r: 114, g: 113, b: 105 }
+                    ColorRgb { r: 140, g: 140, b: 135 } // fujiGray
                 };
                 let style = CellStyle::new()
                     .with_fg(fg)
                     .with_bold(is_active)
                     .with_dim(!is_active);
-                let display_title = if !t.name.is_empty() { &t.name } else { "pwsh" };
-                let mut title = display_title.to_string();
-                if title.chars().count() > 7 {
-                    let mut s: String = title.chars().take(6).collect();
-                    s.push('…');
-                    title = s;
-                }
-                let title_fixed = format!("{:<7}", title);
-                spans.push((format!("  {}: {}  × ", idx + 1, title_fixed), style));
+
+                let clean = clean_tab_title(&t.name);
+                let label = format!("{}  {}", idx + 1, clean);
+                let char_len = label.chars().count();
+                t.width = (char_len as f32 * cell_w + 20.0).clamp(56.0, 160.0);
+
+                let spans = [(label, style)];
+                text_engine.shape_buffer(&mut t.buffer, &spans);
             }
-            spans.push((
-                "  +  ".to_string(),
-                CellStyle::new()
-                    .with_fg(ColorRgb { r: 127, g: 180, b: 202 })
-                    .with_bold(true),
-            ));
-            text_engine.shape_buffer(&mut self.tab_bar_buffer, &spans);
+
+            let plus_style = CellStyle::new()
+                .with_fg(ColorRgb { r: 127, g: 180, b: 202 }) // springBlue
+                .with_bold(true);
+            let plus_spans = [("+".to_string(), plus_style)];
+            text_engine.shape_buffer(&mut self.plus_buffer, &plus_spans);
         }
     }
 
@@ -397,31 +436,19 @@ impl TabManager {
         }
 
         let mut pill_x = 10.0;
-        let pill_w = 140.0;
-
         for idx in 0..self.tabs.len() {
+            let pill_w = self.tabs[idx].width;
             if cx >= pill_x && cx <= pill_x + pill_w {
-                if cx >= pill_x + pill_w - 24.0 {
-                    let leaves = self.tabs[idx].root.all_leaves();
-                    for leaf_id in leaves {
-                        self.panes.remove(&leaf_id);
-                    }
-                    self.tabs.remove(idx);
-                    if self.tabs.is_empty() {
-                        let _ = self.new_tab(content_w, content_h, text_engine, config);
-                    } else if self.active_tab_index >= self.tabs.len() {
-                        self.active_tab_index = self.tabs.len() - 1;
-                    }
-                } else {
-                    self.active_tab_index = idx;
-                }
+                // Focus/switch tab on click. Close button removed completely per user request!
+                self.active_tab_index = idx;
                 self.layout(content_w, content_h, text_engine, config);
                 return TabBarClickResult::Handled;
             }
-            pill_x += pill_w + 6.0;
+            pill_x += pill_w + 4.0;
         }
 
-        if cx >= pill_x && cx <= pill_x + 34.0 {
+        // Plus button to open a new tab
+        if cx >= pill_x && cx <= pill_x + 28.0 {
             let _ = self.new_tab(content_w, content_h, text_engine, config);
             return TabBarClickResult::Handled;
         }
@@ -557,5 +584,20 @@ mod tests {
         assert_eq!(final_root.all_leaves(), vec![1]);
 
         assert!(final_root.remove_pane(1).is_none());
+    }
+
+    #[test]
+    fn test_clean_tab_title() {
+        assert_eq!(clean_tab_title(""), "pwsh");
+        assert_eq!(clean_tab_title("   "), "pwsh");
+        assert_eq!(
+            clean_tab_title(r"C:\WINDOWS\system32\WindowsPowerShell\v1.0\powershell.exe"),
+            "pwsh"
+        );
+        assert_eq!(clean_tab_title("Administrator: Windows PowerShell"), "pwsh");
+        assert_eq!(clean_tab_title(r"C:\Users\kuroha\Pictures"), "Pictures");
+        assert_eq!(clean_tab_title("pwsh"), "pwsh");
+        assert_eq!(clean_tab_title("nvim"), "nvim");
+        assert_eq!(clean_tab_title("verylongnamethatexceeds"), "verylongn…");
     }
 }

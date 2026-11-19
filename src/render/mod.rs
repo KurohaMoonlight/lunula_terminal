@@ -723,12 +723,22 @@ impl TextEngine {
         &mut self,
         device: &Device,
         queue: &Queue,
-        images: impl IntoIterator<Item = (&'a crate::terminal::graphics::KittyImage, f32, f32, f32, f32)>,
+        images: impl IntoIterator<Item = (&'a crate::terminal::graphics::KittyImage, [f32; 4], [f32; 4])>,
+        live_ids: &std::collections::HashSet<u32>,
     ) {
         self.scratch_image_vertices.clear();
         self.active_image_draws.clear();
 
-        for (img, x0, y0, w, h) in images {
+        // Release GPU textures for cleared or evicted images so VRAM never leaks
+        self.image_textures.retain(|id, _| live_ids.contains(id));
+
+        let tex_format = if self.srgb_target {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+
+        for (img, rect, uv) in images {
             if img.dirty.get() || !self.image_textures.contains_key(&img.id) {
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("Kitty Image Texture"),
@@ -740,7 +750,7 @@ impl TextEngine {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format: tex_format,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -786,15 +796,15 @@ impl TextEngine {
             }
 
             let vertex_start = self.scratch_image_vertices.len() as u32;
-            let x1 = x0 + w;
-            let y1 = y0 + h;
+            let [x0, y0, x1, y1] = rect;
+            let [u0, v0, u1, v1] = uv;
 
-            self.scratch_image_vertices.push(ImageVertex { position: [x0, y0], uv: [0.0, 0.0] });
-            self.scratch_image_vertices.push(ImageVertex { position: [x1, y0], uv: [1.0, 0.0] });
-            self.scratch_image_vertices.push(ImageVertex { position: [x1, y1], uv: [1.0, 1.0] });
-            self.scratch_image_vertices.push(ImageVertex { position: [x0, y0], uv: [0.0, 0.0] });
-            self.scratch_image_vertices.push(ImageVertex { position: [x1, y1], uv: [1.0, 1.0] });
-            self.scratch_image_vertices.push(ImageVertex { position: [x0, y1], uv: [0.0, 1.0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x0, y0], uv: [u0, v0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x1, y0], uv: [u1, v0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x1, y1], uv: [u1, v1] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x0, y0], uv: [u0, v0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x1, y1], uv: [u1, v1] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x0, y1], uv: [u0, v1] });
 
             self.active_image_draws.push(ImageDrawCall {
                 image_id: img.id,

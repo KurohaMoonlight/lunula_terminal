@@ -322,6 +322,43 @@ impl TerminalGrid {
         self.dirty = true;
     }
 
+    /// Processes a complete IPC packet containing one or more `_G...\` Kitty Graphics
+    /// sequences without echoing responses back into ConPTY stdin.
+    pub fn handle_ipc_bytes(&mut self, bytes: &[u8]) {
+        let mut idx = 0;
+        while idx + 3 < bytes.len() {
+            if bytes[idx] == 0x1b && bytes[idx + 1] == b'_' && bytes[idx + 2] == b'G' {
+                idx += 3;
+                let start = idx;
+                let mut end = bytes.len();
+                let mut next_idx = bytes.len();
+                while idx < bytes.len() {
+                    if bytes[idx] == 0x07 {
+                        end = idx;
+                        next_idx = idx + 1;
+                        break;
+                    } else if bytes[idx] == 0x1b && idx + 1 < bytes.len() && bytes[idx + 1] == b'\\' {
+                        end = idx;
+                        next_idx = idx + 2;
+                        break;
+                    }
+                    idx += 1;
+                }
+                let _ = self.graphics.handle_kitty_sequence(
+                    &bytes[start..end],
+                    self.cursor_x,
+                    self.cursor_y,
+                    self.scrollback.len(),
+                );
+                self.mark_all_rows_dirty();
+                self.dirty = true;
+                idx = next_idx;
+            } else {
+                idx += 1;
+            }
+        }
+    }
+
     #[inline]
     pub fn content_lines_in_scrollback(&self) -> usize {
         self.scrollback.len()
@@ -366,6 +403,7 @@ impl TerminalGrid {
                     self.scrollback.push_back(line);
                     self.cells.push(oldest);
 
+                    self.graphics.shift_rows_up(1);
                     if let Some(sel) = &mut self.selection {
                         if sel.anchor.abs_row > 0 {
                             sel.anchor.abs_row -= 1;
@@ -380,6 +418,8 @@ impl TerminalGrid {
                 }
             } else {
                 // Recycle the blank top line directly as the new blank bottom line (0 heap alloc!)
+                // Since scrollback.len() did not grow while visible rows moved up by 1, shift images up too.
+                self.graphics.shift_rows_up(1);
                 line.fill(Cell::default());
                 self.cells.push(line);
             }

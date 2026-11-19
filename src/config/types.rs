@@ -9,6 +9,7 @@ pub struct WindowConfig {
     pub lock_size: bool,
     pub opacity: f32,
     pub title: String,
+    pub animate_titlebar: bool,
 }
 
 impl Default for WindowConfig {
@@ -21,6 +22,7 @@ impl Default for WindowConfig {
             lock_size: false,
             opacity: 0.95,
             title: "Lunula Terminal".to_string(),
+            animate_titlebar: true,
         }
     }
 }
