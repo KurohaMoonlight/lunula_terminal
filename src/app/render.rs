@@ -487,7 +487,7 @@ impl GpuState {
                         );
 
                         if let Some((ref preedit_text, _)) = self.ime_preedit {
-                            let preedit_w = (preedit_text.chars().count() as f32 * cell_w).max(cell_w);
+                            let preedit_w = (unicode_width::UnicodeWidthStr::width(preedit_text.as_str()) as f32 * cell_w).max(cell_w);
                             bg_rects.push(terminal::BgRect {
                                 x: pane.cursor_head[0],
                                 y: pane.cursor_head[1],
@@ -1276,7 +1276,7 @@ impl GpuState {
             if let Some(pane) = self.tab_manager.active_pane() {
                 let px = pane.cursor_head[0];
                 let py = pane.cursor_head[1];
-                let pw = (preedit_text.chars().count() as f32 * cell_w).max(cell_w);
+                let pw = (unicode_width::UnicodeWidthStr::width(preedit_text.as_str()) as f32 * cell_w).max(cell_w);
 
                 let spans = vec![(
                     preedit_text.clone(),

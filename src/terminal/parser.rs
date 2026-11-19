@@ -173,7 +173,7 @@ impl Perform for TerminalGrid {
                 while target_col > 0 && self.cells[self.cursor_y][target_col].c == '\0' {
                     target_col -= 1;
                 }
-                let abs_r = self.screen_to_abs_row(self.cursor_y);
+                let abs_r = self.scrollback.len() + self.cursor_y;
                 self.combining_chars.entry((abs_r, target_col)).or_default().push(c);
                 let row_idx = self.cursor_y;
                 self.mark_row_dirty(row_idx);
@@ -194,6 +194,13 @@ impl Perform for TerminalGrid {
         }
 
         if self.cursor_y < self.rows && self.cursor_x < self.cols {
+            let abs_r = self.scrollback.len() + self.cursor_y;
+            self.combining_chars.remove(&(abs_r, self.cursor_x));
+            for extra in 1..w {
+                if self.cursor_x + extra < self.cols {
+                    self.combining_chars.remove(&(abs_r, self.cursor_x + extra));
+                }
+            }
             self.cells[self.cursor_y][self.cursor_x] = Cell {
                 c,
                 style: self.current_style,
@@ -637,25 +644,42 @@ impl Perform for TerminalGrid {
             }
 
             'J' => {
+                let sb_len = self.scrollback.len();
                 match p0 {
                     0 => {
                         if self.cursor_y < self.rows {
+                            let abs_r = sb_len + self.cursor_y;
+                            for c in self.cursor_x..self.cols {
+                                self.combining_chars.remove(&(abs_r, c));
+                            }
                             self.cells[self.cursor_y][self.cursor_x..self.cols].fill(Cell::default());
+                            let start_r = abs_r + 1;
+                            let end_r = sb_len + self.rows;
+                            self.combining_chars.retain(|&(r, _), _| r < start_r || r >= end_r);
                             for r in (self.cursor_y + 1)..self.rows {
                                 self.cells[r].fill(Cell::default());
                             }
                         }
                     }
                     1 => {
+                        let start_r = sb_len;
+                        let abs_r = sb_len + self.cursor_y;
+                        self.combining_chars.retain(|&(r, _), _| r < start_r || r > abs_r);
                         for r in 0..self.cursor_y {
                             self.cells[r].fill(Cell::default());
                         }
                         if self.cursor_y < self.rows {
-                            let end = self.cursor_x.min(self.cols - 1);
+                            let end = self.cursor_x.min(self.cols.saturating_sub(1));
+                            for c in 0..=end {
+                                self.combining_chars.remove(&(abs_r, c));
+                            }
                             self.cells[self.cursor_y][0..=end].fill(Cell::default());
                         }
                     }
                     2 => {
+                        let start_r = sb_len;
+                        let end_r = sb_len + self.rows;
+                        self.combining_chars.retain(|&(r, _), _| r < start_r || r >= end_r);
                         for r in 0..self.rows {
                             self.cells[r].fill(Cell::default());
                         }
@@ -664,10 +688,20 @@ impl Perform for TerminalGrid {
                     }
                     3 => {
                         // xterm / VT: CSI 3 J erases saved lines (scrollback buffer only)
+                        let old_sb = self.scrollback.len();
                         self.scrollback.clear();
                         self.scroll_offset = 0;
                         self.target_scroll_y = 0.0;
                         self.current_scroll_y = 0.0;
+                        if old_sb > 0 {
+                            let mut shifted = std::collections::HashMap::with_capacity(self.combining_chars.len());
+                            for ((r, c), v) in self.combining_chars.drain() {
+                                if r >= old_sb {
+                                    shifted.insert((r - old_sb, c), v);
+                                }
+                            }
+                            self.combining_chars = shifted;
+                        }
                         if !self.hyperlinks.is_empty() {
                             self.prune_hyperlinks();
                         }
@@ -684,15 +718,25 @@ impl Perform for TerminalGrid {
                         style: self.current_style,
                         hyperlink_idx: 0,
                     };
+                    let abs_r = self.scrollback.len() + self.cursor_y;
                     match p0 {
                         0 => {
+                            for c in self.cursor_x..self.cols {
+                                self.combining_chars.remove(&(abs_r, c));
+                            }
                             self.cells[self.cursor_y][self.cursor_x..self.cols].fill(blank);
                         }
                         1 => {
-                            let end = self.cursor_x.min(self.cols - 1);
+                            let end = self.cursor_x.min(self.cols.saturating_sub(1));
+                            for c in 0..=end {
+                                self.combining_chars.remove(&(abs_r, c));
+                            }
                             self.cells[self.cursor_y][0..=end].fill(blank);
                         }
                         2 => {
+                            for c in 0..self.cols {
+                                self.combining_chars.remove(&(abs_r, c));
+                            }
                             self.cells[self.cursor_y].fill(blank);
                         }
                         _ => {}
@@ -705,6 +749,10 @@ impl Perform for TerminalGrid {
                 let n = if p0 == 0 { 1 } else { p0 };
                 if self.cursor_y < self.rows {
                     let end = (self.cursor_x + n).min(self.cols);
+                    let abs_r = self.scrollback.len() + self.cursor_y;
+                    for c in self.cursor_x..end {
+                        self.combining_chars.remove(&(abs_r, c));
+                    }
                     self.cells[self.cursor_y][self.cursor_x..end].fill(Cell::default());
                     self.mark_row_dirty(self.cursor_y);
                 }
@@ -714,6 +762,18 @@ impl Perform for TerminalGrid {
                 let n = if p0 == 0 { 1 } else { p0 };
                 if self.cursor_y < self.rows && self.cursor_x < self.cols {
                     let count = n.min(self.cols - self.cursor_x);
+                    let abs_r = self.scrollback.len() + self.cursor_y;
+                    let mut shifted_line = Vec::new();
+                    for c in self.cursor_x..self.cols {
+                        if let Some(v) = self.combining_chars.remove(&(abs_r, c)) {
+                            if c >= self.cursor_x + count {
+                                shifted_line.push((c - count, v));
+                            }
+                        }
+                    }
+                    for (c, v) in shifted_line {
+                        self.combining_chars.insert((abs_r, c), v);
+                    }
                     let row = &mut self.cells[self.cursor_y];
                     row.copy_within((self.cursor_x + count)..self.cols, self.cursor_x);
                     row[(self.cols - count)..self.cols].fill(Cell::default());
@@ -725,6 +785,18 @@ impl Perform for TerminalGrid {
                 let n = if p0 == 0 { 1 } else { p0 };
                 if self.cursor_y < self.rows && self.cursor_x < self.cols {
                     let count = n.min(self.cols - self.cursor_x);
+                    let abs_r = self.scrollback.len() + self.cursor_y;
+                    let mut shifted_line = Vec::new();
+                    for c in self.cursor_x..self.cols {
+                        if let Some(v) = self.combining_chars.remove(&(abs_r, c)) {
+                            if c + count < self.cols {
+                                shifted_line.push((c + count, v));
+                            }
+                        }
+                    }
+                    for (c, v) in shifted_line {
+                        self.combining_chars.insert((abs_r, c), v);
+                    }
                     let row = &mut self.cells[self.cursor_y];
                     row.copy_within(self.cursor_x..(self.cols - count), self.cursor_x + count);
                     row[self.cursor_x..(self.cursor_x + count)].fill(Cell::default());

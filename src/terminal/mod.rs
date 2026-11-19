@@ -212,6 +212,8 @@ impl TerminalGrid {
             return;
         }
 
+        let mut remapped_cursor = None;
+
         if self.is_alt_screen {
             // Full-screen TUI apps (e.g. vim, htop) manage their own screen layouts on resize
             let mut new_cells = vec![vec![Cell::default(); new_cols]; new_rows];
@@ -222,32 +224,92 @@ impl TerminalGrid {
             self.cells = new_cells;
         } else {
             // Standard primary screen: perform smart line reflow across scrollback and visible rows
-            let mut physical_lines: Vec<Vec<Cell>> = self.scrollback.drain(..).collect();
-            physical_lines.extend(self.cells.drain(..));
+            struct ReflowCell {
+                cell: Cell,
+                combining: Option<Vec<char>>,
+                is_cursor: bool,
+            }
+
+            let old_sb_len = self.scrollback.len();
+            let orig_cursor_row = old_sb_len + self.cursor_y;
+            let orig_cursor_col = self.cursor_x;
+
+            let mut physical_lines: Vec<Vec<ReflowCell>> = Vec::with_capacity(old_sb_len + self.rows);
+            let mut r_idx = 0;
+
+            for row in self.scrollback.drain(..) {
+                let mut reflow_row = Vec::with_capacity(row.len());
+                for (c_idx, cell) in row.into_iter().enumerate() {
+                    let combining = self.combining_chars.remove(&(r_idx, c_idx));
+                    let is_cursor = r_idx == orig_cursor_row && c_idx == orig_cursor_col;
+                    reflow_row.push(ReflowCell { cell, combining, is_cursor });
+                }
+                if r_idx == orig_cursor_row && orig_cursor_col >= reflow_row.len() {
+                    while reflow_row.len() < orig_cursor_col {
+                        reflow_row.push(ReflowCell { cell: Cell::default(), combining: None, is_cursor: false });
+                    }
+                    reflow_row.push(ReflowCell { cell: Cell::default(), combining: None, is_cursor: true });
+                }
+                physical_lines.push(reflow_row);
+                r_idx += 1;
+            }
+
+            for row in self.cells.drain(..) {
+                let mut reflow_row = Vec::with_capacity(row.len());
+                for (c_idx, cell) in row.into_iter().enumerate() {
+                    let combining = self.combining_chars.remove(&(r_idx, c_idx));
+                    let is_cursor = r_idx == orig_cursor_row && c_idx == orig_cursor_col;
+                    reflow_row.push(ReflowCell { cell, combining, is_cursor });
+                }
+                if r_idx == orig_cursor_row && orig_cursor_col >= reflow_row.len() {
+                    while reflow_row.len() < orig_cursor_col {
+                        reflow_row.push(ReflowCell { cell: Cell::default(), combining: None, is_cursor: false });
+                    }
+                    reflow_row.push(ReflowCell { cell: Cell::default(), combining: None, is_cursor: true });
+                }
+                physical_lines.push(reflow_row);
+                r_idx += 1;
+            }
 
             // Trim trailing completely empty lines from the bottom of visible screen so content stays in view
-            while physical_lines.len() > 1
+            while physical_lines.len() > orig_cursor_row + 1
                 && physical_lines.last().map_or(false, |row| {
-                    !row.last().map_or(false, |c| c.style.wrapped())
-                        && !row.iter().any(|c| c.c != ' ' || c.style.bg.is_some() || c.hyperlink_idx > 0)
+                    !row.last().map_or(false, |c| c.cell.style.wrapped())
+                        && !row.iter().any(|c| c.is_cursor || c.cell.c != ' ' || c.cell.style.bg.is_some() || c.cell.hyperlink_idx > 0)
                 })
             {
                 physical_lines.pop();
             }
 
             // 1. Group physical lines into continuous logical lines based on soft-wrapping
-            let mut logical_lines: Vec<Vec<Cell>> = Vec::new();
-            let mut current_logical: Vec<Cell> = Vec::new();
+            let mut logical_lines: Vec<Vec<ReflowCell>> = Vec::new();
+            let mut current_logical: Vec<ReflowCell> = Vec::new();
 
             for row in physical_lines {
-                let was_wrapped = row.last().map_or(false, |c| c.style.wrapped());
+                let was_wrapped = row.last().map_or(false, |c| c.cell.style.wrapped());
                 let content_len = row
                     .iter()
-                    .rposition(|c| c.c != ' ' || c.style.bg.is_some() || c.hyperlink_idx > 0)
+                    .rposition(|c| c.is_cursor || c.cell.c != ' ' || c.cell.style.bg.is_some() || c.cell.hyperlink_idx > 0)
                     .map_or(0, |i| i + 1);
-                let take_len = if was_wrapped { row.len() } else { content_len };
 
-                current_logical.extend_from_slice(&row[..take_len]);
+                let take_len = if was_wrapped {
+                    if row.len() > 1
+                        && content_len == row.len() - 1
+                        && row.last().map_or(false, |c| !c.is_cursor && c.cell.c == ' ' && c.cell.style.bg.is_none() && c.cell.hyperlink_idx == 0)
+                    {
+                        row.len() - 1
+                    } else {
+                        row.len()
+                    }
+                } else {
+                    content_len
+                };
+
+                let mut row_items = row;
+                if take_len < row_items.len() {
+                    row_items.truncate(take_len);
+                }
+                current_logical.extend(row_items);
 
                 if !was_wrapped {
                     logical_lines.push(std::mem::take(&mut current_logical));
@@ -257,23 +319,47 @@ impl TerminalGrid {
                 logical_lines.push(current_logical);
             }
 
-            // 2. Re-wrap logical lines to new_cols
-            let mut new_physical_lines: Vec<Vec<Cell>> = Vec::new();
+            // 2. Re-wrap logical lines to new_cols (with 2-width character protection)
+            let mut new_physical_lines: Vec<Vec<ReflowCell>> = Vec::new();
             for mut logical in logical_lines {
                 if logical.is_empty() {
-                    new_physical_lines.push(vec![Cell::default(); new_cols]);
+                    new_physical_lines.push((0..new_cols).map(|_| ReflowCell {
+                        cell: Cell::default(),
+                        combining: None,
+                        is_cursor: false,
+                    }).collect());
                     continue;
                 }
                 while !logical.is_empty() {
                     if logical.len() > new_cols {
-                        let mut row: Vec<Cell> = logical.drain(..new_cols).collect();
+                        // Prevent cutting in the middle of a 2-width character (CJK/emoji):
+                        // If logical[new_cols] is '\0', then logical[new_cols - 1] is the start of a 2-width character.
+                        let drain_len = if logical[new_cols].cell.c == '\0' {
+                            new_cols - 1
+                        } else {
+                            new_cols
+                        };
+                        let mut row: Vec<ReflowCell> = logical.drain(..drain_len).collect();
+                        while row.len() < new_cols {
+                            row.push(ReflowCell {
+                                cell: Cell::default(),
+                                combining: None,
+                                is_cursor: false,
+                            });
+                        }
                         if let Some(last) = row.last_mut() {
-                            last.style.set_wrapped(true);
+                            last.cell.style.set_wrapped(true);
                         }
                         new_physical_lines.push(row);
                     } else {
                         let mut row = std::mem::take(&mut logical);
-                        row.resize(new_cols, Cell::default());
+                        while row.len() < new_cols {
+                            row.push(ReflowCell {
+                                cell: Cell::default(),
+                                combining: None,
+                                is_cursor: false,
+                            });
+                        }
                         new_physical_lines.push(row);
                     }
                 }
@@ -281,20 +367,84 @@ impl TerminalGrid {
 
             // 3. Ensure minimum height
             while new_physical_lines.len() < new_rows {
-                new_physical_lines.push(vec![Cell::default(); new_cols]);
+                new_physical_lines.push((0..new_cols).map(|_| ReflowCell {
+                    cell: Cell::default(),
+                    combining: None,
+                    is_cursor: false,
+                }).collect());
             }
 
-            // 4. Distribute into visible cells (last new_rows) and scrollback (preceding)
+            // 4. Locate remapped cursor position in reflowed lines
+            let mut found_cursor = None;
+            for (r, row) in new_physical_lines.iter().enumerate() {
+                for (c, item) in row.iter().enumerate() {
+                    if item.is_cursor {
+                        found_cursor = Some((r, c));
+                        break;
+                    }
+                }
+                if found_cursor.is_some() {
+                    break;
+                }
+            }
+
+            // 5. Distribute into visible cells (last new_rows) and scrollback (preceding)
             let split_idx = new_physical_lines.len().saturating_sub(new_rows);
+            remapped_cursor = found_cursor.map(|(cr, cc)| {
+                let cy = if cr >= split_idx {
+                    cr - split_idx
+                } else {
+                    0
+                };
+                let cx = cc.min(new_cols.saturating_sub(1));
+                (cx, cy)
+            });
+
             let visible_part = new_physical_lines.split_off(split_idx);
-            self.cells = visible_part;
+            let mut tentative_combining = Vec::new();
+
+            self.cells = visible_part
+                .into_iter()
+                .enumerate()
+                .map(|(screen_r, row)| {
+                    let abs_r = split_idx + screen_r;
+                    row.into_iter()
+                        .enumerate()
+                        .map(|(c, item)| {
+                            if let Some(comb) = item.combining {
+                                tentative_combining.push(((abs_r, c), comb));
+                            }
+                            item.cell
+                        })
+                        .collect()
+                })
+                .collect();
 
             self.scrollback.clear();
-            for line in new_physical_lines {
-                if self.scrollback.len() >= self.max_scrollback {
-                    self.scrollback.pop_front();
+            let scrollback_count = new_physical_lines.len();
+            let excess = scrollback_count.saturating_sub(self.max_scrollback);
+
+            for (sb_r, row) in new_physical_lines.into_iter().enumerate() {
+                if sb_r >= excess {
+                    let abs_r = sb_r - excess;
+                    let cells: Vec<Cell> = row
+                        .into_iter()
+                        .enumerate()
+                        .map(|(c, item)| {
+                            if let Some(comb) = item.combining {
+                                self.combining_chars.insert((abs_r, c), comb);
+                            }
+                            item.cell
+                        })
+                        .collect();
+                    self.scrollback.push_back(cells);
                 }
-                self.scrollback.push_back(line);
+            }
+
+            for ((abs_r, c), comb) in tentative_combining {
+                if abs_r >= excess {
+                    self.combining_chars.insert((abs_r - excess, c), comb);
+                }
             }
         }
 
@@ -311,8 +461,13 @@ impl TerminalGrid {
         self.rows = new_rows;
         self.scroll_region_top = 0;
         self.scroll_region_bottom = new_rows.saturating_sub(1);
-        self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
-        self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
+        if let Some((cx, cy)) = remapped_cursor {
+            self.cursor_x = cx;
+            self.cursor_y = cy;
+        } else {
+            self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
+            self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
+        }
         self.scroll_offset = 0;
         self.target_scroll_y = 0.0;
         self.current_scroll_y = 0.0;
@@ -521,6 +676,15 @@ impl TerminalGrid {
                             sel.active.abs_row -= 1;
                         }
                     }
+
+                    // Shift combining_chars: row 0 popped, all other rows r -> r - 1
+                    let mut shifted = std::collections::HashMap::with_capacity(self.combining_chars.len());
+                    for ((r, c), v) in self.combining_chars.drain() {
+                        if r > 0 {
+                            shifted.insert((r - 1, c), v);
+                        }
+                    }
+                    self.combining_chars = shifted;
                 } else {
                     self.scrollback.push_back(line);
                     self.cells.push(vec![Cell::default(); self.cols]);
@@ -529,6 +693,19 @@ impl TerminalGrid {
                 // Recycle the blank top line directly as the new blank bottom line (0 heap alloc!)
                 // Since scrollback.len() did not grow while visible rows moved up by 1, shift images up too.
                 self.graphics.shift_rows_up(1);
+                let sb_len = self.scrollback.len();
+                let top_abs = sb_len;
+                let bottom_abs = sb_len + self.rows;
+                let mut shifted = std::collections::HashMap::with_capacity(self.combining_chars.len());
+                for ((r, c), v) in self.combining_chars.drain() {
+                    if r < top_abs || r >= bottom_abs {
+                        shifted.insert((r, c), v);
+                    } else if r > top_abs {
+                        shifted.insert((r - 1, c), v);
+                    }
+                }
+                self.combining_chars = shifted;
+
                 line.fill(Cell::default());
                 self.cells.push(line);
             }
@@ -536,6 +713,18 @@ impl TerminalGrid {
             let mut recycled = self.cells.remove(self.scroll_region_top);
             recycled.fill(Cell::default());
             self.cells.insert(self.scroll_region_bottom, recycled);
+            let sb_len = self.scrollback.len();
+            let top_abs = sb_len + self.scroll_region_top;
+            let bottom_abs = sb_len + self.scroll_region_bottom;
+            let mut shifted = std::collections::HashMap::with_capacity(self.combining_chars.len());
+            for ((r, c), v) in self.combining_chars.drain() {
+                if r < top_abs || r > bottom_abs {
+                    shifted.insert((r, c), v);
+                } else if r > top_abs {
+                    shifted.insert((r - 1, c), v);
+                }
+            }
+            self.combining_chars = shifted;
         }
         self.dirty = true;
     }
@@ -550,6 +739,18 @@ impl TerminalGrid {
         let mut recycled = self.cells.remove(self.scroll_region_bottom);
         recycled.fill(Cell::default());
         self.cells.insert(self.scroll_region_top, recycled);
+        let sb_len = self.scrollback.len();
+        let top_abs = sb_len + self.scroll_region_top;
+        let bottom_abs = sb_len + self.scroll_region_bottom;
+        let mut shifted = std::collections::HashMap::with_capacity(self.combining_chars.len());
+        for ((r, c), v) in self.combining_chars.drain() {
+            if r < top_abs || r > bottom_abs {
+                shifted.insert((r, c), v);
+            } else if r < bottom_abs {
+                shifted.insert((r + 1, c), v);
+            }
+        }
+        self.combining_chars = shifted;
         self.dirty = true;
     }
 
@@ -1480,5 +1681,120 @@ mod tests {
         // Disable focus reporting
         grid.advance_bytes(b"\x1b[?1004l");
         assert!(!grid.focus_reporting);
+    }
+
+    #[test]
+    fn test_combining_chars_lifecycle_overwrite_and_clear() {
+        let mut grid = TerminalGrid::new(20, 5);
+
+        // 1. Write 'e' + combining acute -> attached to (0, 0)
+        grid.advance_bytes("e\u{0301}".as_bytes());
+        assert_eq!(grid.combining_chars.get(&(0, 0)), Some(&vec!['\u{0301}']));
+
+        // 2. Overwrite cell (0, 0) with 'a' -> combining char at (0, 0) must be deleted
+        grid.advance_bytes(b"\x1b[H"); // Cursor to (0, 0)
+        grid.advance_bytes(b"a");
+        assert_eq!(grid.cells[0][0].c, 'a');
+        assert_eq!(grid.combining_chars.get(&(0, 0)), None);
+
+        // 3. Clear line (CSI K) deletes combining chars
+        grid.advance_bytes("e\u{0301}".as_bytes());
+        assert_eq!(grid.combining_chars.get(&(0, 1)), Some(&vec!['\u{0301}']));
+        grid.advance_bytes(b"\x1b[2K"); // Erase entire line
+        assert_eq!(grid.combining_chars.get(&(0, 1)), None);
+
+        // 4. Clear screen (CSI 2J) deletes combining chars
+        grid.advance_bytes("e\u{0301}".as_bytes());
+        assert!(!grid.combining_chars.is_empty());
+        grid.advance_bytes(b"\x1b[2J");
+        assert!(grid.combining_chars.is_empty());
+    }
+
+    #[test]
+    fn test_combining_chars_scrollback_shift() {
+        let mut grid = TerminalGrid::new(10, 5);
+        grid.max_scrollback = 2;
+
+        // Line 0: "e\u{0301}"
+        grid.advance_bytes("e\u{0301}\r\n".as_bytes());
+        // Lines 1, 2, 3 fill rows 1, 2, 3 (cursor lands on bottom row 4)
+        for i in 1..=3 {
+            grid.advance_bytes(format!("row{}\r\n", i).as_bytes());
+        }
+        assert_eq!(grid.scrollback.len(), 0);
+
+        // Scroll 1: newline on row 4 scrolls row 0 into scrollback!
+        grid.advance_bytes(b"row4\r\n");
+        assert_eq!(grid.scrollback.len(), 1);
+        assert_eq!(grid.combining_chars.get(&(0, 0)), Some(&vec!['\u{0301}']));
+
+        // Scroll 2: scrolls row 1 into scrollback! (scrollback.len() == 2)
+        grid.advance_bytes(b"row5\r\n");
+        assert_eq!(grid.scrollback.len(), 2);
+        assert_eq!(grid.combining_chars.get(&(0, 0)), Some(&vec!['\u{0301}']));
+
+        // Scroll 3: scrolls row 2 into scrollback!
+        // Scrollback was full (2), so pop_front pops row 0! Combining char at (0, 0) is discarded.
+        grid.advance_bytes(b"row6\r\n");
+        assert_eq!(grid.scrollback.len(), 2);
+        assert_eq!(grid.combining_chars.get(&(0, 0)), None);
+    }
+
+    #[test]
+    fn test_reflow_wide_char_no_split() {
+        let mut grid = TerminalGrid::new(10, 5);
+        // Print 9 ASCII chars, then 1 2-width Japanese Kanji '漢'
+        // '漢' requires 2 cells and cannot fit at column 9, so it should wrap to row 1 col 0-1
+        grid.advance_bytes("123456789漢".as_bytes());
+        assert_eq!(grid.cells[0][8].c, '9');
+        assert_eq!(grid.cells[1][0].c, '漢');
+        assert_eq!(grid.cells[1][1].c, '\0');
+
+        // Now test resize reflow: starting from a wide grid that wraps at exactly a 2-width char
+        let mut grid2 = TerminalGrid::new(15, 5);
+        // 9 chars + '漢' (2 cols) = 11 cols total (fits in 15)
+        grid2.advance_bytes("123456789漢".as_bytes());
+        assert_eq!(grid2.cells[0][9].c, '漢');
+        assert_eq!(grid2.cells[0][10].c, '\0');
+
+        // Resize down to 10 columns: '漢' starts at col 9, which would be split across 10 cols!
+        // Reflow must wrap '漢' to row 1 column 0 without leaving '\0' on column 0 of row 1!
+        grid2.resize(10, 5);
+        assert_eq!(grid2.cells[0][8].c, '9');
+        assert_eq!(grid2.cells[1][0].c, '漢');
+        assert_eq!(grid2.cells[1][1].c, '\0');
+    }
+
+    #[test]
+    fn test_reflow_cursor_remapping() {
+        let mut grid = TerminalGrid::new(30, 5);
+        // 34 chars prompt: wraps to row 0 (30 chars) and row 1 (4 chars)
+        grid.advance_bytes(b"PS C:\\Users\\Admin> 123456789012345");
+        assert_eq!(grid.cursor_y, 1);
+        assert_eq!(grid.cursor_x, 4);
+
+        // Expand to 50 columns: line unwraps to 1 row, cursor must be remapped to row 0 col 34!
+        grid.resize(50, 5);
+        assert_eq!(grid.cursor_y, 0);
+        assert_eq!(grid.cursor_x, 34);
+
+        // Shrink to 20 columns: row 0 (20 chars), row 1 (14 chars), cursor must be at row 1 col 14!
+        grid.resize(20, 5);
+        assert_eq!(grid.cursor_y, 1);
+        assert_eq!(grid.cursor_x, 14);
+    }
+
+    #[test]
+    fn test_reflow_combining_chars_preserved() {
+        let mut grid = TerminalGrid::new(15, 5);
+        // 12 chars followed by 'e' + combining acute (14 cols total)
+        grid.advance_bytes("123456789012e\u{0301}".as_bytes());
+        assert_eq!(grid.combining_chars.get(&(0, 12)), Some(&vec!['\u{0301}']));
+
+        // Resize down to 10 columns: line wraps, 'e' moves to row 1 col 2!
+        grid.resize(10, 5);
+        assert_eq!(grid.cells[1][2].c, 'e');
+        // Combining char must be at row 1 col 2!
+        assert_eq!(grid.combining_chars.get(&(1, 2)), Some(&vec!['\u{0301}']));
     }
 }
