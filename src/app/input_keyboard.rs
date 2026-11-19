@@ -560,6 +560,116 @@ impl GpuState {
                 }
                 _ => {
                     pane.terminal.scroll_to_bottom();
+                    let kitty_flags = pane.terminal.kitty_keyboard_flags;
+                    let mut mods = 1u8;
+                    if self.shift_pressed { mods += 1; }
+                    if self.alt_pressed { mods += 2; }
+                    if self.ctrl_pressed { mods += 4; }
+                    if self.super_pressed { mods += 8; }
+
+                    if kitty_flags != 0 {
+                        match &key_event.logical_key {
+                            Key::Named(NamedKey::Enter) => {
+                                pane.terminal.clear_selection();
+                                if mods > 1 || (kitty_flags & 8 != 0) {
+                                    pane.pty.write_bytes(format!("\x1b[13;{}u", mods).as_bytes());
+                                } else {
+                                    pane.pty.write_bytes(b"\r");
+                                }
+                                self.drain_pty();
+                                self.window.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Tab) => {
+                                pane.terminal.clear_selection();
+                                if mods > 1 || (kitty_flags & 8 != 0) {
+                                    pane.pty.write_bytes(format!("\x1b[9;{}u", mods).as_bytes());
+                                } else {
+                                    pane.pty.write_bytes(b"\t");
+                                }
+                                self.drain_pty();
+                                self.window.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                pane.terminal.clear_selection();
+                                if mods > 1 || (kitty_flags & 8 != 0) {
+                                    pane.pty.write_bytes(format!("\x1b[127;{}u", mods).as_bytes());
+                                } else {
+                                    pane.pty.write_bytes(b"\x7f");
+                                }
+                                self.drain_pty();
+                                self.window.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                pane.terminal.clear_selection();
+                                if mods > 1 || (kitty_flags & 8 != 0) {
+                                    pane.pty.write_bytes(format!("\x1b[27;{}u", mods).as_bytes());
+                                } else {
+                                    pane.pty.write_bytes(b"\x1b");
+                                }
+                                self.drain_pty();
+                                self.window.request_redraw();
+                                return;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                pane.terminal.clear_selection();
+                                if mods > 1 || (kitty_flags & 8 != 0) {
+                                    pane.pty.write_bytes(format!("\x1b[32;{}u", mods).as_bytes());
+                                } else {
+                                    pane.pty.write_bytes(b" ");
+                                }
+                                self.drain_pty();
+                                self.window.request_redraw();
+                                return;
+                            }
+                            Key::Character(text_str) => {
+                                if mods > 1 {
+                                    let mut handled = false;
+                                    for ch in text_str.chars() {
+                                        if (ch == 'c' || ch == 'C' || ch == '\x03') && self.ctrl_pressed && pane.terminal.has_selection() {
+                                            if let Some(text) = pane.terminal.get_selected_text() {
+                                                clipboard::set_text(&text);
+                                            }
+                                            pane.terminal.clear_selection();
+                                            handled = true;
+                                            break;
+                                        }
+                                        if (ch == 'v' || ch == 'V' || ch == '\x16') && self.ctrl_pressed && !self.alt_pressed {
+                                            if let Some(text) = clipboard::get_text() {
+                                                let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+                                                if pane.terminal.bracketed_paste {
+                                                    pane.pty.write_bytes(b"\x1b[200~");
+                                                    pane.pty.write_bytes(normalized.as_bytes());
+                                                    pane.pty.write_bytes(b"\x1b[201~");
+                                                } else {
+                                                    pane.pty.write_bytes(normalized.as_bytes());
+                                                }
+                                                pane.terminal.scroll_to_bottom();
+                                            }
+                                            handled = true;
+                                            break;
+                                        }
+                                        let cp = if ch.is_ascii_uppercase() && self.shift_pressed {
+                                            ch.to_ascii_lowercase() as u32
+                                        } else {
+                                            ch as u32
+                                        };
+                                        pane.pty.write_bytes(format!("\x1b[{};{}u", cp, mods).as_bytes());
+                                        handled = true;
+                                    }
+                                    if handled {
+                                        self.drain_pty();
+                                        self.window.request_redraw();
+                                        return;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
                     match &key_event.logical_key {
                         Key::Named(NamedKey::Space) => {
                             pane.terminal.clear_selection();
@@ -586,8 +696,8 @@ impl GpuState {
                             pane.pty.write_bytes(b"\x1b");
                         }
                         Key::Named(NamedKey::ArrowUp) => {
-                            if self.ctrl_pressed {
-                                pane.pty.write_bytes(b"\x1b[1;5A");
+                            if mods > 1 {
+                                pane.pty.write_bytes(format!("\x1b[1;{}A", mods).as_bytes());
                             } else if pane.terminal.app_cursor_keys {
                                 pane.pty.write_bytes(b"\x1bOA");
                             } else {
@@ -595,8 +705,8 @@ impl GpuState {
                             }
                         }
                         Key::Named(NamedKey::ArrowDown) => {
-                            if self.ctrl_pressed {
-                                pane.pty.write_bytes(b"\x1b[1;5B");
+                            if mods > 1 {
+                                pane.pty.write_bytes(format!("\x1b[1;{}B", mods).as_bytes());
                             } else if pane.terminal.app_cursor_keys {
                                 pane.pty.write_bytes(b"\x1bOB");
                             } else {
@@ -604,8 +714,8 @@ impl GpuState {
                             }
                         }
                         Key::Named(NamedKey::ArrowRight) => {
-                            if self.ctrl_pressed {
-                                pane.pty.write_bytes(b"\x1b[1;5C");
+                            if mods > 1 {
+                                pane.pty.write_bytes(format!("\x1b[1;{}C", mods).as_bytes());
                             } else if pane.terminal.app_cursor_keys {
                                 pane.pty.write_bytes(b"\x1bOC");
                             } else {
@@ -613,8 +723,8 @@ impl GpuState {
                             }
                         }
                         Key::Named(NamedKey::ArrowLeft) => {
-                            if self.ctrl_pressed {
-                                pane.pty.write_bytes(b"\x1b[1;5D");
+                            if mods > 1 {
+                                pane.pty.write_bytes(format!("\x1b[1;{}D", mods).as_bytes());
                             } else if pane.terminal.app_cursor_keys {
                                 pane.pty.write_bytes(b"\x1bOD");
                             } else {
@@ -622,8 +732,8 @@ impl GpuState {
                             }
                         }
                         Key::Named(NamedKey::Home) => {
-                            if self.ctrl_pressed {
-                                pane.pty.write_bytes(b"\x1b[1;5H");
+                            if mods > 1 {
+                                pane.pty.write_bytes(format!("\x1b[1;{}H", mods).as_bytes());
                             } else if pane.terminal.app_cursor_keys {
                                 pane.pty.write_bytes(b"\x1bOH");
                             } else {
@@ -631,8 +741,8 @@ impl GpuState {
                             }
                         }
                         Key::Named(NamedKey::End) => {
-                            if self.ctrl_pressed {
-                                pane.pty.write_bytes(b"\x1b[1;5F");
+                            if mods > 1 {
+                                pane.pty.write_bytes(format!("\x1b[1;{}F", mods).as_bytes());
                             } else if pane.terminal.app_cursor_keys {
                                 pane.pty.write_bytes(b"\x1bOF");
                             } else {

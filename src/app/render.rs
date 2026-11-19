@@ -723,6 +723,32 @@ impl GpuState {
         self.text_engine
             .update_bg_rects(&self.device, &self.queue, &bg_rects);
 
+        // Upload Kitty Graphics images for visible panes
+        let mut image_draw_requests = Vec::new();
+        for &id in &visible_leaves {
+            if let Some(pane) = self.tab_manager.panes.get(&id) {
+                let pane_x = pane.rect[0] + pane::PANE_PAD;
+                let pane_y = pane.rect[1] + pane::PANE_PAD;
+                let scrollback_len = pane.terminal.scrollback.len();
+                let scroll_offset = pane.terminal.scroll_offset;
+                let rows = pane.terminal.rows;
+
+                for img in &pane.terminal.graphics.images {
+                    let doc_start = scrollback_len.saturating_sub(scroll_offset);
+                    if img.abs_row + img.height_cells > doc_start && img.abs_row < doc_start + rows {
+                        let screen_row = img.abs_row as f32 - doc_start as f32;
+                        let x = pane_x + img.col as f32 * cell_w;
+                        let y = pane_y + screen_row * cell_h;
+                        let w = img.width_cells as f32 * cell_w;
+                        let h = img.height_cells as f32 * cell_h;
+                        image_draw_requests.push((img, x, y, w, h));
+                    }
+                }
+            }
+        }
+        self.text_engine
+            .update_images(&self.device, &self.queue, image_draw_requests);
+
         // Prepare Text Areas
         let mut areas = Vec::with_capacity(visible_leaves.len() + 6);
         let bar_text_top = (10.0 + (28.0 - self.text_engine.line_height) * 0.5).round();

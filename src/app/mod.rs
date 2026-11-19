@@ -107,6 +107,7 @@ impl ApplicationHandler for LunulaApp {
                 s.ctrl_pressed = mods.state().control_key();
                 s.shift_pressed = mods.state().shift_key();
                 s.alt_pressed = mods.state().alt_key();
+                s.super_pressed = mods.state().super_key();
             }
             WindowEvent::KeyboardInput {
                 event: key_event, ..

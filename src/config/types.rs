@@ -149,6 +149,21 @@ impl Default for ColorsConfig {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct FetchConfig {
+    pub animation: u8,
+    pub live: bool,
+}
+
+impl Default for FetchConfig {
+    fn default() -> Self {
+        Self {
+            animation: 1,
+            live: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LunulaConfig {
     pub window: WindowConfig,
@@ -158,4 +173,5 @@ pub struct LunulaConfig {
     pub scroll: ScrollConfig,
     pub tabs: TabsConfig,
     pub colors: ColorsConfig,
+    pub fetch: FetchConfig,
 }

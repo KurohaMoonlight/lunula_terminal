@@ -204,6 +204,17 @@ impl LunulaConfig {
                     }
                 }
             }
+
+            if let Ok(f_val) = table.get::<Table>("fetch") {
+                if let Ok(anim) = f_val.get::<u8>("animation") {
+                    if anim == 1 || anim == 2 {
+                        config.fetch.animation = anim;
+                    }
+                }
+                if let Ok(live) = f_val.get::<bool>("live") {
+                    config.fetch.live = live;
+                }
+            }
         }
 
         Ok(config)
@@ -227,6 +238,8 @@ mod tests {
         assert_eq!(cfg.cursor.shape, "block");
         assert!(cfg.cursor.trail);
         assert_eq!(cfg.colors.selection, [45, 79, 103]);
+        assert_eq!(cfg.fetch.animation, 1);
+        assert!(cfg.fetch.live);
     }
 
     #[test]
@@ -238,6 +251,7 @@ mod tests {
             terminal = { font_size = 18.0, max_scrollback = 10000 },
             cursor = { shape = "beam", blinking = false, color = "#ff79c6" },
             colors = { selection = "#ff5577" },
+            fetch = { animation = 2, live = false },
         }
         "##;
         let cfg = LunulaConfig::parse_lua(script).expect("parse custom");
@@ -254,6 +268,8 @@ mod tests {
         assert!(!cfg.cursor.blinking);
         assert_eq!(cfg.cursor.color, [255, 121, 198]);
         assert_eq!(cfg.colors.selection, [255, 85, 119]);
+        assert_eq!(cfg.fetch.animation, 2);
+        assert!(!cfg.fetch.live);
     }
 
     #[test]

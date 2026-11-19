@@ -315,6 +315,25 @@ impl Perform for TerminalGrid {
         }
     }
 
+    fn hook(&mut self, _params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        if action == 'G' || intermediates.contains(&b'G') {
+            self.dcs_graphics_buffer.clear();
+        }
+    }
+
+    fn put(&mut self, byte: u8) {
+        if self.dcs_graphics_buffer.len() < 100 * 1024 * 1024 {
+            self.dcs_graphics_buffer.push(byte);
+        }
+    }
+
+    fn unhook(&mut self) {
+        if !self.dcs_graphics_buffer.is_empty() {
+            let buf = std::mem::take(&mut self.dcs_graphics_buffer);
+            self.handle_apc_kitty(&buf);
+        }
+    }
+
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         let is_private = intermediates.contains(&b'?');
         let is_secondary = intermediates.contains(&b'>');
@@ -465,6 +484,11 @@ impl Perform for TerminalGrid {
                         self.responses.push(resp.into_bytes());
                     }
                 }
+                'u' => {
+                    // Kitty Keyboard Protocol: CSI ? u (Query current active flags)
+                    let resp = format!("\x1b[?{}u", self.kitty_keyboard_flags);
+                    self.responses.push(resp.into_bytes());
+                }
                 _ => {}
             }
             return;
@@ -548,6 +572,7 @@ impl Perform for TerminalGrid {
                         }
                         self.cursor_x = 0;
                         self.cursor_y = 0;
+                        self.graphics.images.clear();
                     }
                     3 => {
                         for r in 0..self.rows {
@@ -559,6 +584,7 @@ impl Perform for TerminalGrid {
                         self.current_scroll_y = 0.0;
                         self.cursor_x = 0;
                         self.cursor_y = 0;
+                        self.graphics.images.clear();
                     }
                     _ => {}
                 }
@@ -712,9 +738,45 @@ impl Perform for TerminalGrid {
                 self.saved_cursor_y = self.cursor_y;
             }
             'u' => {
-                self.cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
-                self.cursor_y = self.saved_cursor_y.min(self.rows.saturating_sub(1));
-                self.dirty = true;
+                if intermediates.contains(&b'>') {
+                    // Kitty Keyboard Protocol: CSI > flags u (Push flags onto stack)
+                    let flags = p0 as u8;
+                    self.kitty_keyboard_stack.push(self.kitty_keyboard_flags);
+                    if self.kitty_keyboard_stack.len() > 32 {
+                        self.kitty_keyboard_stack.remove(0);
+                    }
+                    self.kitty_keyboard_flags = flags;
+                } else if intermediates.contains(&b'<') {
+                    // Kitty Keyboard Protocol: CSI < count u (Pop flags from stack)
+                    let count = if p0 == 0 { 1 } else { p0 };
+                    for _ in 0..count {
+                        if let Some(prev) = self.kitty_keyboard_stack.pop() {
+                            self.kitty_keyboard_flags = prev;
+                        } else {
+                            self.kitty_keyboard_flags = 0;
+                            break;
+                        }
+                    }
+                } else if intermediates.contains(&b'?') {
+                    // Kitty Keyboard Protocol: CSI ? u (Query current active flags)
+                    let resp = format!("\x1b[?{}u", self.kitty_keyboard_flags);
+                    self.responses.push(resp.into_bytes());
+                } else if intermediates.contains(&b'=') {
+                    // Kitty Keyboard Protocol: CSI = flags ; mode u (Set/modify flags)
+                    let flags = p0 as u8;
+                    let mode = if p1 == 0 { 1 } else { p1 };
+                    match mode {
+                        1 => self.kitty_keyboard_flags = flags,
+                        2 => self.kitty_keyboard_flags |= flags,
+                        3 => self.kitty_keyboard_flags &= !flags,
+                        _ => {}
+                    }
+                } else {
+                    // Traditional VT: Restore Cursor
+                    self.cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
+                    self.cursor_y = self.saved_cursor_y.min(self.rows.saturating_sub(1));
+                    self.dirty = true;
+                }
             }
 
             _ => {}

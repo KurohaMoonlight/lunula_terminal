@@ -49,6 +49,39 @@ impl BgVertex {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct ImageVertex {
+    pub position: [f32; 2],
+    pub uv: [f32; 2],
+}
+
+impl ImageVertex {
+    pub const fn desc() -> VertexBufferLayout<'static> {
+        VertexBufferLayout {
+            array_stride: std::mem::size_of::<ImageVertex>() as wgpu::BufferAddress,
+            step_mode: VertexStepMode::Vertex,
+            attributes: &[
+                VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: VertexFormat::Float32x2,
+                },
+                VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: VertexFormat::Float32x2,
+                },
+            ],
+        }
+    }
+}
+
+pub struct ImageDrawCall {
+    pub image_id: u32,
+    pub vertex_start: u32,
+}
+
 #[allow(dead_code)]
 
 /// sRGB-encoded channel (0..1) -> linear light. Needed because the swapchain is an sRGB
@@ -93,6 +126,15 @@ pub struct TextEngine {
     scratch_vertices: Vec<BgVertex>,
     /// True when the render target is an sRGB format: palette bytes must be linearised.
     pub srgb_target: bool,
+
+    pub image_pipeline: RenderPipeline,
+    pub image_bind_group_layout: wgpu::BindGroupLayout,
+    pub image_sampler: wgpu::Sampler,
+    pub image_vertex_buffer: wgpu::Buffer,
+    pub image_vertex_capacity: usize,
+    pub image_textures: std::collections::HashMap<u32, (wgpu::Texture, BindGroup)>,
+    pub active_image_draws: Vec<ImageDrawCall>,
+    scratch_image_vertices: Vec<ImageVertex>,
 }
 
 impl TextEngine {
@@ -271,6 +313,96 @@ impl TextEngine {
             mapped_at_creation: false,
         });
 
+        let image_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Kitty Image Shader"),
+            source: ShaderSource::Wgsl(include_str!("shaders/image.wgsl").into()),
+        });
+
+        let image_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Kitty Image Texture Bind Group Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+        let image_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Kitty Image Pipeline Layout"),
+            bind_group_layouts: &[
+                Some(&bg_bind_group_layout),
+                Some(&image_bind_group_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        let image_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Kitty Image Render Pipeline"),
+            layout: Some(&image_pipeline_layout),
+            vertex: VertexState {
+                module: &image_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(ImageVertex::desc())],
+                compilation_options: PipelineCompilationOptions::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &image_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: PipelineCompilationOptions::default(),
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Kitty Image Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let image_vertex_capacity = 256;
+        let image_vertex_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Kitty Image Vertex Buffer"),
+            size: (image_vertex_capacity * std::mem::size_of::<ImageVertex>()) as u64,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             font_system,
             font_family: resolved_font,
@@ -293,6 +425,14 @@ impl TextEngine {
             bg_vertex_count: 0,
             scratch_vertices: Vec::with_capacity(initial_capacity),
             srgb_target: format.is_srgb(),
+            image_pipeline,
+            image_bind_group_layout,
+            image_sampler,
+            image_vertex_buffer,
+            image_vertex_capacity,
+            image_textures: std::collections::HashMap::new(),
+            active_image_draws: Vec::new(),
+            scratch_image_vertices: Vec::with_capacity(image_vertex_capacity),
         }
     }
 
@@ -579,6 +719,108 @@ impl TextEngine {
         );
     }
 
+    pub fn update_images<'a>(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        images: impl IntoIterator<Item = (&'a crate::terminal::graphics::KittyImage, f32, f32, f32, f32)>,
+    ) {
+        self.scratch_image_vertices.clear();
+        self.active_image_draws.clear();
+
+        for (img, x0, y0, w, h) in images {
+            if img.dirty.get() || !self.image_textures.contains_key(&img.id) {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Kitty Image Texture"),
+                    size: wgpu::Extent3d {
+                        width: img.pixel_width.max(1),
+                        height: img.pixel_height.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &img.rgba_data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * img.pixel_width),
+                        rows_per_image: Some(img.pixel_height),
+                    },
+                    wgpu::Extent3d {
+                        width: img.pixel_width.max(1),
+                        height: img.pixel_height.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Kitty Image Bind Group"),
+                    layout: &self.image_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                        },
+                    ],
+                });
+
+                self.image_textures.insert(img.id, (texture, bind_group));
+                img.dirty.set(false);
+            }
+
+            let vertex_start = self.scratch_image_vertices.len() as u32;
+            let x1 = x0 + w;
+            let y1 = y0 + h;
+
+            self.scratch_image_vertices.push(ImageVertex { position: [x0, y0], uv: [0.0, 0.0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x1, y0], uv: [1.0, 0.0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x1, y1], uv: [1.0, 1.0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x0, y0], uv: [0.0, 0.0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x1, y1], uv: [1.0, 1.0] });
+            self.scratch_image_vertices.push(ImageVertex { position: [x0, y1], uv: [0.0, 1.0] });
+
+            self.active_image_draws.push(ImageDrawCall {
+                image_id: img.id,
+                vertex_start,
+            });
+        }
+
+        let num_vertices = self.scratch_image_vertices.len();
+        if num_vertices > 0 {
+            if num_vertices > self.image_vertex_capacity {
+                self.image_vertex_capacity = num_vertices.next_power_of_two().max(256);
+                self.image_vertex_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("Kitty Image Vertex Buffer"),
+                    size: (self.image_vertex_capacity * std::mem::size_of::<ImageVertex>()) as u64,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            queue.write_buffer(
+                &self.image_vertex_buffer,
+                0,
+                bytemuck::cast_slice(&self.scratch_image_vertices),
+            );
+        }
+    }
+
     pub fn render<'pass>(&'pass self, pass: &mut RenderPass<'pass>) {
         if self.bg_vertex_count > 0 {
             pass.set_pipeline(&self.bg_pipeline);
@@ -586,6 +828,20 @@ impl TextEngine {
             pass.set_vertex_buffer(0, self.bg_vertex_buffer.slice(..));
             pass.draw(0..self.bg_vertex_count, 0..1);
         }
+
+        // Render Kitty Graphics Protocol images between BgRect and glyphon text
+        if !self.active_image_draws.is_empty() {
+            pass.set_pipeline(&self.image_pipeline);
+            pass.set_bind_group(0, &self.bg_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
+            for draw in &self.active_image_draws {
+                if let Some((_, bind_group)) = self.image_textures.get(&draw.image_id) {
+                    pass.set_bind_group(1, bind_group, &[]);
+                    pass.draw(draw.vertex_start..draw.vertex_start + 6, 0..1);
+                }
+            }
+        }
+
         let _ = self.renderer.render(&self.atlas, &self.viewport, pass);
     }
 }

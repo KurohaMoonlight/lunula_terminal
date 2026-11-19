@@ -1,6 +1,7 @@
 //! Core `TerminalGrid` state machine with `O(1)` `VecDeque` scrollback and buffer recycling.
 
 pub mod cell;
+pub mod graphics;
 pub mod parser;
 pub mod procedural;
 pub mod renderer;
@@ -49,6 +50,16 @@ pub struct TerminalGrid {
     pub in_sync_update: bool,
     pub sync_update_start: Option<std::time::Instant>,
     pub dirty_rows: Vec<u64>,
+    /// Active Kitty Keyboard Protocol flags bitmask (CSI > flags u)
+    pub kitty_keyboard_flags: u8,
+    /// Stack of previous Kitty Keyboard Protocol flags (up to 32 levels)
+    pub kitty_keyboard_stack: Vec<u8>,
+    /// Kitty Graphics Protocol manager (APC / DCS G)
+    pub graphics: graphics::KittyGraphicsManager,
+    /// Pending APC buffer for multi-byte streaming sequences
+    pub apc_buffer: Option<Vec<u8>>,
+    /// Pending DCS graphics buffer
+    pub dcs_graphics_buffer: Vec<u8>,
 }
 
 impl TerminalGrid {
@@ -101,6 +112,11 @@ impl TerminalGrid {
             in_sync_update: false,
             sync_update_start: None,
             dirty_rows,
+            kitty_keyboard_flags: 0,
+            kitty_keyboard_stack: Vec::new(),
+            graphics: graphics::KittyGraphicsManager::new(),
+            apc_buffer: None,
+            dcs_graphics_buffer: Vec::new(),
         }
     }
 
@@ -197,9 +213,113 @@ impl TerminalGrid {
     }
 
     pub fn advance_bytes(&mut self, bytes: &[u8]) {
-        let mut parser = std::mem::replace(&mut self.parser, Parser::new());
-        parser.advance(self, bytes);
-        self.parser = parser;
+        let mut idx = 0;
+        let mut normal_start = 0;
+
+        while idx < bytes.len() {
+            if let Some(ref mut apc) = self.apc_buffer {
+                // Currently buffering an APC sequence. Look for ST (\x1b\ or \x07)
+                // Check if ST was split across buffer chunks (previous chunk ended with 0x1b, this chunk starts with b'\\')
+                if apc.last() == Some(&0x1b) && bytes[idx] == b'\\' {
+                    apc.pop();
+                    let full_apc = std::mem::take(apc);
+                    self.apc_buffer = None;
+                    self.handle_apc_kitty(&full_apc);
+                    idx += 1;
+                    normal_start = idx;
+                    continue;
+                }
+
+                let mut found_st = false;
+                let mut scan = idx;
+                while scan < bytes.len() {
+                    if bytes[scan] == 0x07 {
+                        apc.extend_from_slice(&bytes[idx..scan]);
+                        idx = scan + 1;
+                        found_st = true;
+                        break;
+                    } else if bytes[scan] == 0x1b && scan + 1 < bytes.len() && bytes[scan + 1] == b'\\' {
+                        apc.extend_from_slice(&bytes[idx..scan]);
+                        idx = scan + 2;
+                        found_st = true;
+                        break;
+                    }
+                    scan += 1;
+                }
+
+                if found_st {
+                    let full_apc = std::mem::take(apc);
+                    self.apc_buffer = None;
+                    self.handle_apc_kitty(&full_apc);
+                    normal_start = idx;
+                } else {
+                    apc.extend_from_slice(&bytes[idx..]);
+                    return;
+                }
+            } else if bytes[idx] == 0x1b
+                && idx + 2 < bytes.len()
+                && bytes[idx + 1] == b'_'
+                && bytes[idx + 2] == b'G'
+            {
+                // Found APC Kitty Graphics start: \x1b_G
+                if idx > normal_start {
+                    let mut parser = std::mem::replace(&mut self.parser, Parser::new());
+                    parser.advance(self, &bytes[normal_start..idx]);
+                    self.parser = parser;
+                }
+
+                idx += 3; // Skip \x1b_G
+                let mut apc = Vec::new();
+                let mut found_st = false;
+                let mut scan = idx;
+
+                while scan < bytes.len() {
+                    if bytes[scan] == 0x07 {
+                        apc.extend_from_slice(&bytes[idx..scan]);
+                        idx = scan + 1;
+                        found_st = true;
+                        break;
+                    } else if bytes[scan] == 0x1b && scan + 1 < bytes.len() && bytes[scan + 1] == b'\\' {
+                        apc.extend_from_slice(&bytes[idx..scan]);
+                        idx = scan + 2;
+                        found_st = true;
+                        break;
+                    }
+                    scan += 1;
+                }
+
+                if found_st {
+                    self.handle_apc_kitty(&apc);
+                    normal_start = idx;
+                } else {
+                    apc.extend_from_slice(&bytes[idx..]);
+                    self.apc_buffer = Some(apc);
+                    return;
+                }
+            } else {
+                idx += 1;
+            }
+        }
+
+        if normal_start < bytes.len() {
+            let mut parser = std::mem::replace(&mut self.parser, Parser::new());
+            parser.advance(self, &bytes[normal_start..]);
+            self.parser = parser;
+        }
+    }
+
+    pub fn handle_apc_kitty(&mut self, payload: &[u8]) {
+        let resp = self.graphics.handle_kitty_sequence(
+            payload,
+            self.cursor_x,
+            self.cursor_y,
+            self.scrollback.len(),
+        );
+        if let Some(r) = resp {
+            self.responses.push(r.into_bytes());
+        }
+        self.mark_all_rows_dirty();
+        self.dirty = true;
     }
 
     #[inline]
@@ -811,5 +931,92 @@ mod tests {
         assert!(!grid.is_row_dirty(1));
         assert!(!grid.is_row_dirty(2));
         assert!(!grid.is_row_dirty(4));
+    }
+
+    #[test]
+    fn test_kitty_keyboard_protocol_stack_and_query() {
+        let mut grid = TerminalGrid::new(80, 24);
+        assert_eq!(grid.kitty_keyboard_flags, 0);
+
+        // 1. Query initial flags
+        grid.advance_bytes(b"\x1b[?u");
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b[?0u");
+
+        // 2. Push flags = 1 (disambiguate escape codes)
+        grid.advance_bytes(b"\x1b[>1u");
+        assert_eq!(grid.kitty_keyboard_flags, 1);
+        assert_eq!(grid.kitty_keyboard_stack, vec![0]);
+
+        // 3. Query flags -> should be 1
+        grid.advance_bytes(b"\x1b[?u");
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b[?1u");
+
+        // 4. Push flags = 3
+        grid.advance_bytes(b"\x1b[>3u");
+        assert_eq!(grid.kitty_keyboard_flags, 3);
+        assert_eq!(grid.kitty_keyboard_stack, vec![0, 1]);
+
+        // 5. Pop flags -> restores 1
+        grid.advance_bytes(b"\x1b[<1u");
+        assert_eq!(grid.kitty_keyboard_flags, 1);
+        assert_eq!(grid.kitty_keyboard_stack, vec![0]);
+
+        // 6. Pop flags again -> restores 0
+        grid.advance_bytes(b"\x1b[<u");
+        assert_eq!(grid.kitty_keyboard_flags, 0);
+        assert!(grid.kitty_keyboard_stack.is_empty());
+
+        // 7. Modify mode with CSI = flags ; mode u
+        grid.advance_bytes(b"\x1b[=5;1u"); // set = 5
+        assert_eq!(grid.kitty_keyboard_flags, 5);
+        grid.advance_bytes(b"\x1b[=2;2u"); // OR with 2 -> 5 | 2 = 7
+        assert_eq!(grid.kitty_keyboard_flags, 7);
+        grid.advance_bytes(b"\x1b[=4;3u"); // AND NOT 4 -> 7 & !4 = 3
+        assert_eq!(grid.kitty_keyboard_flags, 3);
+    }
+
+    #[test]
+    fn test_kitty_graphics_apc_and_dcs_handling() {
+        let mut grid = TerminalGrid::new(40, 10);
+        assert_eq!(grid.graphics.images.len(), 0);
+
+        // 1. Send 2x2 RGBA image via APC sequence: \x1b_G...;\x1b\
+        let apc_seq = b"\x1b_Ga=t,f=32,s=2,v=2,c=4,r=2,i=100;/wAA//8AAP//AAD//wAA/w==\x1b\\";
+        grid.advance_bytes(apc_seq);
+        assert_eq!(grid.graphics.images.len(), 1);
+        assert_eq!(grid.graphics.images[0].id, 100);
+        assert_eq!(grid.graphics.images[0].width_cells, 4);
+        assert_eq!(grid.graphics.images[0].height_cells, 2);
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b_Gi=100;OK\x1b\\");
+
+        // Cursor remains at position (image is placed at cursor cell)
+        assert_eq!(grid.cursor_y, 0);
+
+        // 2. Clear screen with \x1b[2J -> should clear images
+        grid.advance_bytes(b"\x1b[2J");
+        assert_eq!(grid.graphics.images.len(), 0);
+
+        // 3. Send via DCS sequence: \x1bPG...;\x1b\
+        let dcs_seq = b"\x1bPGa=t,f=32,s=2,v=2,c=2,r=1,i=101;/wAA//8AAP//AAD//wAA/w==\x1b\\";
+        grid.advance_bytes(dcs_seq);
+        assert_eq!(grid.graphics.images.len(), 1);
+        assert_eq!(grid.graphics.images[0].id, 101);
+        assert_eq!(grid.responses.pop().unwrap(), b"\x1b_Gi=101;OK\x1b\\");
+
+        // 4. Delete image via Kitty APC delete sequence: \x1b_Ga=d,d=i,i=101;\x1b\
+        grid.advance_bytes(b"\x1b_Ga=d,d=i,i=101;\x1b\\");
+        assert_eq!(grid.graphics.images.len(), 0);
+
+        // 5. Test split sequence across multiple buffer chunks (e.g. streaming over TCP)
+        let chunk1 = b"\x1b_Ga=t,f=32,s=2,v=2,c=4,r=2,i=102;/wAA";
+        let chunk2 = b"//8AAP//AAD//wAA/w";
+        let chunk3 = b"==\x1b\\";
+        grid.advance_bytes(chunk1);
+        assert_eq!(grid.graphics.images.len(), 0); // Not completed yet
+        grid.advance_bytes(chunk2);
+        assert_eq!(grid.graphics.images.len(), 0); // Not completed yet
+        grid.advance_bytes(chunk3);
+        assert_eq!(grid.graphics.images.len(), 1); // Completed upon ST!
+        assert_eq!(grid.graphics.images[0].id, 102);
     }
 }

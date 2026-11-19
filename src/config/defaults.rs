@@ -67,6 +67,14 @@ return {
         -- Warna highlight teks yang di-select mouse
         selection = "#2d4f67", -- Kanagawa waveBlue2
     },
+    fetch = {
+        -- Pilihan animasi lfetch: 1 atau 2
+        -- 1: 3D Raymarched Moon & Great Wave Breaking Crest + Foam Claw (38x15)
+        -- 2: 3D Analytical Moon dengan kawah berotasi & rolling Kanagawa swells (44x17)
+        animation = 1,
+        -- Mode default: true = animasi interaktif live, false = cetak 1 frame instan (< 5ms)
+        live = true,
+    },
 }
 "##;
 

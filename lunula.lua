@@ -29,7 +29,7 @@ return {
     },
     terminal = {
         font_family = "0xProto Nerd Font Mono", -- Font monospace/nerd font (auto-fallback jika tidak ditemukan)
-        font_size = 14.5,
+        font_size = 18,
         max_scrollback = 5000,
     },
     cursor = {
@@ -62,5 +62,13 @@ return {
     colors = {
         -- Warna highlight teks yang di-select mouse
         selection = "#2d4f67", -- Kanagawa waveBlue2
+    },
+    fetch = {
+        -- Pilihan animasi lfetch: 1 atau 2
+        -- 1: 3D Raymarched Moon & Great Wave Breaking Crest + Foam Claw (38x15)
+        -- 2: 3D Analytical Moon dengan kawah berotasi & rolling Kanagawa swells (44x17)
+        animation = 2,
+        -- Mode default: true = animasi interaktif live, false = cetak 1 frame instan (< 5ms)
+        live = true,
     },
 }

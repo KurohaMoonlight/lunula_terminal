@@ -69,6 +69,14 @@ impl PtyManager {
             cmd.arg(format!("& '{}'", lfetch_path.display()));
         }
 
+        // Direct local IPC bridge for binary-safe protocol passthrough (e.g. Kitty Graphics via limg)
+        let ipc_listener_opt = std::net::TcpListener::bind("127.0.0.1:0").ok();
+        if let Some(ref listener) = ipc_listener_opt {
+            if let Ok(addr) = listener.local_addr() {
+                cmd.env("LUNULA_IPC_PORT", addr.port().to_string());
+            }
+        }
+
         let child = pair.slave.spawn_command(cmd)?;
 
         let mut reader = pair.master.try_clone_reader()?;
@@ -80,6 +88,8 @@ impl PtyManager {
 
         let exited_clone = Arc::clone(&exited);
         let wake_clone = Arc::clone(&wake_pending);
+        let tx_reader = tx.clone();
+        let proxy_reader = proxy.clone();
 
         thread::Builder::new()
             .name("conpty-reader".into())
@@ -88,20 +98,49 @@ impl PtyManager {
                 while let Ok(n) = reader.read(&mut buf) {
                     if n == 0 {
                         exited_clone.store(true, Ordering::Release);
-                        let _ = proxy.send_event(());
+                        let _ = proxy_reader.send_event(());
                         break;
                     }
-                    if tx.send(buf[..n].to_vec()).is_err() {
+                    if tx_reader.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                     // Coalesce wake events: only post to winit event loop if not already pending
                     if !wake_clone.swap(true, Ordering::AcqRel) {
-                        let _ = proxy.send_event(());
+                        let _ = proxy_reader.send_event(());
                     }
                 }
                 exited_clone.store(true, Ordering::Release);
-                let _ = proxy.send_event(());
+                let _ = proxy_reader.send_event(());
             })?;
+
+        if let Some(listener) = ipc_listener_opt {
+            let tx_ipc = tx;
+            let proxy_ipc = proxy;
+            let wake_ipc = Arc::clone(&wake_pending);
+            let exited_ipc = Arc::clone(&exited);
+
+            thread::Builder::new()
+                .name("lunula-ipc".into())
+                .spawn(move || {
+                    while let Ok((mut stream, _)) = listener.accept() {
+                        if exited_ipc.load(Ordering::Acquire) {
+                            break;
+                        }
+                        let mut buf = [0u8; 65536];
+                        while let Ok(n) = stream.read(&mut buf) {
+                            if n == 0 {
+                                break;
+                            }
+                            if tx_ipc.send(buf[..n].to_vec()).is_err() {
+                                break;
+                            }
+                            if !wake_ipc.swap(true, Ordering::AcqRel) {
+                                let _ = proxy_ipc.send_event(());
+                            }
+                        }
+                    }
+                })?;
+        }
 
         Ok(Self {
             master: pair.master,
